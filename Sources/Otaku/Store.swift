@@ -23,6 +23,7 @@ enum Tab: String, CaseIterable {
     @Published var rowEnd: [String: CGFloat] = [:] // furthest it can scroll
     @Published var hoverRow: String?
     @Published var hoverCard: String?
+    @Published var detailWidth: CGFloat = 1000 // width beside the poster on a show's page; narrow puts the synopsis under the stats
     @Published var expandedLinks: Set<String> = [] // link lists showing "+N more" expanded
     @Published var schedule: [Airing]?
     @Published var onlyMine = UserDefaults.standard.bool(forKey: "onlyMine") { didSet { UserDefaults.standard.set(onlyMine, forKey: "onlyMine") } }
@@ -47,6 +48,11 @@ enum Tab: String, CaseIterable {
     }
 
     var key: String { tmdbKey.trimmingCharacters(in: .whitespacesAndNewlines) }
+    @Published var motnKey = UserDefaults.standard.string(forKey: "motnKey") ?? "" {
+        didSet { UserDefaults.standard.set(motnKey, forKey: "motnKey"); watch = [:]; MotN.viaRapid = nil }
+    }
+    var motn: String { motnKey.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var hasWatchKey: Bool { !key.isEmpty || !motn.isEmpty }
     var region: String { Locale.current.region?.identifier ?? "US" }
     var regionName: String { Locale.current.localizedString(forRegionCode: region) ?? region }
 
@@ -95,8 +101,8 @@ enum Tab: String, CaseIterable {
         typing = Task {
             if !q.isEmpty { try? await Task.sleep(for: .milliseconds(550)) }
             guard !Task.isCancelled, q == query.trimmingCharacters(in: .whitespaces) else { return }
+            if !q.isEmpty, q == resultsFor, results != nil { return } // already searched (e.g. Enter, then a click on a result)
             if !q.isEmpty, tab != .discover || !path.isEmpty { tab = .discover; path = [] } // typing elsewhere: show the results
-            if !q.isEmpty, q == resultsFor, results != nil { return } // already showing these
             await search() // empty: back to filters only, or the start page
         }
     }
@@ -116,12 +122,15 @@ enum Tab: String, CaseIterable {
         await loadWatch(a)
     }
 
+    // Movie of the Night first (direct links, fine for a paid app), TMDB as the fallback.
     func loadWatch(_ a: Anime) async {
-        let key = key, region = region
-        guard !key.isEmpty, watch[a.id] == nil else { return }
+        let key = key, motn = motn, region = region
+        guard hasWatchKey, watch[a.id] == nil else { return }
         let pick = UserDefaults.standard.object(forKey: "tmdb." + a.id) as? Int
-        watch[a.id] = await fetch("watch:\(a.id):\(region):\(pick ?? 0)",
-                                  [{ try await TMDB.watch(for: a, key: key, region: region, pick: pick) }], main: false)
+        var sources: [() async throws -> Watch] = []
+        if !motn.isEmpty { sources.append { try await MotN.watch(for: a, key: motn, region: region, pick: pick) } }
+        if !key.isEmpty { sources.append { try await TMDB.watch(for: a, key: key, region: region, pick: pick) } }
+        watch[a.id] = await fetch("watch:\(a.id):\(region):\(pick ?? 0):\(motn.isEmpty ? "t" : "m")", sources, main: false)
     }
 
     func choose(_ a: Anime, _ tmdbId: Int) {

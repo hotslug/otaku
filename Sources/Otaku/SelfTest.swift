@@ -141,6 +141,25 @@ import Foundation
         let g = Buttons.group([("Hulu", u), ("Hoopla (Sub)", u), ("Hoopla (Dub)", u), ("Crunchyroll", u), ("YouTube (VIZ Media)", u)])
         check(g.map(\.name) == ["Crunchyroll", "Hulu", "Hoopla", "YouTube"] && g[2].variants.map(\.0) == ["Sub", "Dub"] && g[3].variants.map(\.0) == ["VIZ Media"],
               "links grouped, big services first: \(g.map { "\($0.name) \($0.variants.map(\.0))" })")
+        // Movie of the Night: a sample show, as their docs describe it.
+        let show: J = ["title": "Frieren: Beyond Journey's End", "tmdbId": "tv/209867", "firstAirYear": 2023, "seasonCount": 1,
+                       "genres": [["id": "animation", "name": "Animation"]],
+                       "streamingOptions": ["gb": [
+                           ["service": ["id": "crunchyroll", "name": "Crunchyroll", "homePage": "https://www.crunchyroll.com/"], "type": "subscription", "link": "https://www.crunchyroll.com/series/GG5H5XQX4"],
+                           ["service": ["id": "prime", "name": "Prime Video"], "type": "buy", "link": "https://www.amazon.co.uk/gp/video/detail/x"],
+                           ["service": ["id": "crunchyroll", "name": "Crunchyroll"], "type": "subscription", "link": "https://www.crunchyroll.com/other"],
+                       ]]]
+        let mw = MotN.watch(from: show, country: "gb", candidates: [])
+        check(mw.stream == ["Crunchyroll"] && mw.buy == ["Prime Video"] && mw.tmdbId == 209867 && mw.seasons == 1, "motn lists: \(mw.stream) \(mw.buy)")
+        check(mw.direct["Crunchyroll"]?.absoluteString == "https://www.crunchyroll.com/series/GG5H5XQX4", "motn direct link: first one wins")
+        let ranked2 = MotN.rank([["title": "Live", "firstAirYear": 2023], ["title": "Anime", "firstAirYear": 2019, "genres": [["id": "animation"]]],
+                                 ["title": "Anime 2023", "firstAirYear": 2023, "genres": [["id": "animation"]]]], year: 2023)
+        check(ranked2.first?.s("title") == "Anime 2023", "motn ranks animated + same year first")
+        check(MotN.watch(from: show, country: "us", candidates: []).stream.isEmpty, "motn: other countries ignored")
+        let sp = Synopsis.split("The adventure is over.\n\n(Source: Crunchyroll)")
+        check(sp.body == "The adventure is over." && sp.source == "Crunchyroll", "synopsis source split: \(sp)")
+        check(Synopsis.split("Text [Written by MAL Rewrite]").source == "MAL Rewrite", "MAL-style credit")
+        check(Synopsis.split("No credit here (really).").source == nil, "no false credit")
         check(AniList.date(["year": 2013, "month": 4, "day": 7]) == "2013-04-07" && AniList.date(["year": 2026]) == "2026", "dates")
 
         if ProcessInfo.processInfo.environment["OTAKU_LIVE"] != nil { live() }

@@ -714,6 +714,76 @@ struct SkeletonRows: View {
     }
 }
 
+// The synopsis, book-page style: comfortable size and spacing, the source as a small credit, long ones folded.
+struct Synopsis: View {
+    @ObservedObject var store: Store
+    let id: String
+    let text: String
+
+    // "...adventure.\n\n(Source: Crunchyroll)" -> ("...adventure.", "Crunchyroll")
+    static func split(_ s: String) -> (body: String, source: String?) {
+        let pattern = #"\s*[\(\[](?:Source|Written by)\s*:?\s*([^\)\]]+)[\)\]]\s*$"#
+        guard let r = s.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else { return (s, nil) }
+        let src = s[r].replacingOccurrences(of: #"^\s*[\(\[](?:Source|Written by)\s*:?\s*|[\)\]]\s*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+        return (String(s[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines), src)
+    }
+
+    var body: some View {
+        let (body, source) = Self.split(text)
+        let long = body.count > 480
+        let open = store.expandedLinks.contains("synopsis:" + id)
+        VStack(alignment: .leading, spacing: 10) {
+            Text(body)
+                .font(.system(size: 15))
+                .lineSpacing(5)
+                .foregroundStyle(.primary.opacity(0.88))
+                .lineLimit(long && !open ? 5 : nil)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 14) {
+                if long {
+                    Button(open ? "Show less" : "Read more") {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            if open { store.expandedLinks.remove("synopsis:" + id) } else { store.expandedLinks.insert("synopsis:" + id) }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Theme.sunset)
+                }
+                if let source { Text("Synopsis from \(source)").font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+        .frame(maxWidth: 680, alignment: .leading)
+    }
+}
+
+// Tries each image in turn (a missing one falls through to the next); last resort is the top of the poster, fading out.
+struct BannerImage: View {
+    let urls: [URL]
+    let poster: URL?
+
+    var body: some View {
+        if let first = urls.first {
+            AsyncImage(url: first, transaction: Transaction(animation: .easeOut(duration: 0.35))) { phase in
+                switch phase {
+                case .success(let img): img.resizable().aspectRatio(contentMode: .fill).transition(.opacity)
+                case .failure: AnyView(BannerImage(urls: Array(urls.dropFirst()), poster: poster))
+                default: Rectangle().fill(.quaternary).shimmer()
+                }
+            }
+        } else {
+            GeometryReader { g in
+                FadeImage(url: poster)
+                    .frame(width: g.size.width, height: g.size.width * 1.4, alignment: .top) // poster shape, top part shows
+                    .frame(width: g.size.width, height: g.size.height, alignment: .top)
+                    .clipped()
+                    .mask(LinearGradient(colors: [.black, .black, .black.opacity(0.15)], startPoint: .top, endPoint: .bottom))
+            }
+        }
+    }
+}
+
 // An image that shimmers while loading and fades in when it arrives.
 struct FadeImage: View {
     let url: URL?
@@ -753,15 +823,9 @@ struct DetailView: View {
                 if loading {
                     // Cards don't carry the banner, so hold its space while loading instead of shoving the page down later.
                     RoundedRectangle(cornerRadius: 10).fill(.quaternary).frame(height: 160).shimmer().transition(.identity)
-                } else if let b = a.banner {
-                    FadeImage(url: b)
-                        .frame(height: 160).frame(maxWidth: .infinity).clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 } else {
-                    // No banner: a blurred poster fills the same space, so the page never shifts.
-                    FadeImage(url: a.poster)
-                        .blur(radius: 40)
-                        .opacity(0.7)
+                    // Its own banner (or one borrowed from the series), else the trailer's still, else the top of the poster.
+                    BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster)
                         .frame(height: 160).frame(maxWidth: .infinity).clipped()
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
@@ -779,29 +843,25 @@ struct DetailView: View {
                                 .foregroundStyle(Theme.sunset)
                                 .font(.headline)
                         }
-                        if loading { SkeletonLines(widths: [180, 150, 120, 90, 110, 70, 100, 130, 220]).transition(.identity) }
-                        else { Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
-                            row("Started", a.start)
-                            row("Ended", a.end)
-                            row("Status", a.status)
-                            row("Format", a.format)
-                            row("Seasons", seasons(a))
-                            row("Episodes", a.episodes.map(String.init))
-                            row("Score", a.score.map { "\($0) / 100" })
-                            row("Fans", a.popularity?.formatted())
-                            row("Studio", a.studio)
-                            row("Genres", a.genres.isEmpty ? nil : a.genres.joined(separator: ", "))
+                        // Stats with the synopsis beside them, filling the space under the buttons;
+                        // on a narrow window the synopsis drops below the stats instead.
+                        if store.detailWidth >= 760 {
+                            HStack(alignment: .top, spacing: 36) {
+                                stats(a, loading: loading).fixedSize()
+                                synopsis(a, loading: loading).frame(maxWidth: 680, alignment: .leading)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 18) {
+                                stats(a, loading: loading)
+                                synopsis(a, loading: loading)
+                            }
                         }
-                        .transition(.opacity) }
                     }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.detailWidth = $0 }
                 }
                 if loading {
-                    SkeletonLines(widths: [700, 720, 690, 710, 420], height: 13).transition(.identity)
                     SkeletonStrip().transition(.identity)
                 } else {
-                if !a.synopsis.isEmpty {
-                    Text(a.synopsis).textSelection(.enabled).frame(maxWidth: 760, alignment: .leading)
-                }
                 if let t = a.trailer {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionTitle("Trailer")
@@ -893,10 +953,34 @@ struct DetailView: View {
         }
     }
 
+    @ViewBuilder func stats(_ a: Anime, loading: Bool) -> some View {
+        if loading { SkeletonLines(widths: [180, 150, 120, 90, 110, 70, 100, 130, 220]).transition(.identity) }
+        else {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
+                row("Started", a.start)
+                row("Ended", a.end)
+                row("Status", a.status)
+                row("Format", a.format)
+                row("Seasons", seasons(a))
+                row("Episodes", a.episodes.map(String.init))
+                row("Score", a.score.map { "\($0) / 100" })
+                row("Fans", a.popularity?.formatted())
+                row("Studio", a.studio)
+                row("Genres", a.genres.isEmpty ? nil : a.genres.joined(separator: ", "))
+            }
+            .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder func synopsis(_ a: Anime, loading: Bool) -> some View {
+        if loading { SkeletonLines(widths: [420, 440, 400, 430, 260], height: 13).transition(.identity) }
+        else if !a.synopsis.isEmpty { Synopsis(store: store, id: anime.id, text: a.synopsis).transition(.opacity) }
+    }
+
     func seasons(_ a: Anime) -> String? {
         if let s = store.watch[anime.id]?.seasons { return "\(s)" }
         guard let n = a.tvSeasons, n > 0 else { return nil }
-        return (a.seasonsMore ? "\(n)+" : "\(n)") + " TV parts"
+        return (a.seasonsMore ? "\(n)+" : "\(n)") + (n == 1 && !a.seasonsMore ? " TV part" : " TV parts")
     }
 
     @ViewBuilder func row(_ k: String, _ v: String?) -> some View {
@@ -906,28 +990,28 @@ struct DetailView: View {
     @ViewBuilder func whereToWatch(_ a: Anime) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle("Where to watch")
-            if store.key.isEmpty {
-                Text("Add a free TMDB key to see what's streaming in \(store.regionName) and where it first aired. It takes about two minutes.")
+            if !store.hasWatchKey {
+                Text("Add a free key to see what's streaming in \(store.regionName), with links straight to the show. It takes about two minutes.")
                     .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
-                    Link(destination: URL(string: "https://www.themoviedb.org/settings/api")!) { Label("Get a free TMDB key", systemImage: "key") }
+                    Link(destination: URL(string: "https://www.movieofthenight.com/about/api")!) { Label("Get a free Movie of the Night key", systemImage: "key") }
                         .buttonStyle(ChipStyle())
-                        .help("Opens themoviedb.org: sign up, then Settings → API")
+                        .help("Opens Movie of the Night's Streaming Availability API page")
                     SettingsLink { Label("Paste it in Settings", systemImage: "gearshape") }
                         .buttonStyle(ChipStyle())
                         .help("Opens Otaku's Settings (⌘,)")
                 }
             } else if let w = store.watch[anime.id] {
                 if w.tmdbId == nil {
-                    Text("Couldn't match this show on TMDB.").foregroundStyle(.secondary)
+                    Text("Couldn't find this show on \(w.source == "Movie of the Night" ? "Movie of the Night" : "TMDB").").foregroundStyle(.secondary)
                 } else {
                     if !w.stream.isEmpty {
                         Text("Streaming in \(store.regionName)").font(.headline)
-                        Buttons(items: w.stream.compactMap { p in (directLink(p, a.links) ?? w.link).map { (p, $0) } }, id: "stream:" + anime.id)
+                        Buttons(items: w.stream.compactMap { p in (w.direct[p] ?? directLink(p, a.links) ?? w.link).map { (p, $0) } }, id: "stream:" + anime.id)
                     }
                     if !w.buy.isEmpty {
                         Text("Rent or buy in \(store.regionName)").font(.headline)
-                        Buttons(items: w.buy.compactMap { p in (directLink(p, a.links) ?? w.link).map { (p, $0) } }, id: "buy:" + anime.id)
+                        Buttons(items: w.buy.compactMap { p in (w.direct[p] ?? directLink(p, a.links) ?? w.link).map { (p, $0) } }, id: "buy:" + anime.id)
                     }
                     if w.stream.isEmpty, w.buy.isEmpty {
                         Text("Not available in \(store.regionName) right now.").foregroundStyle(.secondary)
@@ -935,11 +1019,11 @@ struct DetailView: View {
                     if !w.networks.isEmpty {
                         Text("Originally aired on: " + w.networks.joined(separator: ", "))
                     }
-                    Text("Availability from JustWatch via TMDB · matched “\(w.name)”\(w.year.map { " (\($0))" } ?? "")")
+                    Text("Availability from \(w.source) · matched “\(w.name)”\(w.year.map { " (\($0))" } ?? "")")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if !w.candidates.isEmpty {
-                    FilterChip(icon: "questionmark.circle", label: "Wrong match?", active: false, tip: "Pick the right show on TMDB") {
+                    FilterChip(icon: "questionmark.circle", label: "Wrong match?", active: false, tip: "Pick the right show") {
                         ForEach(w.candidates) { c in
                             Button(c.name + (c.year.map { " (\($0))" } ?? "")) { store.choose(anime, c.id) }
                         }
@@ -1130,6 +1214,13 @@ struct SettingsView: View {
             }
 
             SettingsCard(title: "Where to watch") {
+                KeyField(prompt: "Paste your Movie of the Night key", text: $store.motnKey, saved: !store.motn.isEmpty)
+                Text("Recommended. Shows what's streaming in \(store.regionName) (from your Mac's region), with links straight to the show. Keys from Movie of the Night or from RapidAPI both work.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Link(destination: URL(string: "https://www.movieofthenight.com/about/api")!) { Label("Get a free Movie of the Night key", systemImage: "key") }
+                    .buttonStyle(ChipStyle())
+                    .focusable(false)
+                Divider().padding(.vertical, 4)
                 HStack(spacing: 10) {
                     SecureField("Paste your TMDB key", text: $store.tmdbKey)
                         .textFieldStyle(.plain)
@@ -1142,7 +1233,7 @@ struct SettingsView: View {
                         Label("Key saved", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.gold)
                     }
                 }
-                Text("Optional. Shows what's streaming in \(store.regionName) (from your Mac's region) and where a show first aired. The API key or the read access token both work.")
+                Text("Optional extra, for personal use: adds where a show first aired, and is used when Movie of the Night can't help. The API key or the read access token both work.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Link(destination: URL(string: "https://www.themoviedb.org/settings/api")!) { Label("Get a free TMDB key", systemImage: "key") }
                     .buttonStyle(ChipStyle())
@@ -1150,7 +1241,7 @@ struct SettingsView: View {
             }
 
             SettingsCard(title: "About") {
-                Text("Anime data from AniList, with Kitsu as a backup. Streaming availability from JustWatch, via TMDB.")
+                Text("Anime data from AniList, with Kitsu as a backup. Streaming availability from Movie of the Night, or JustWatch via TMDB.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Link(destination: URL(string: "https://anilist.co")!) { Text("AniList") }.buttonStyle(ChipStyle()).focusable(false)
@@ -1193,6 +1284,25 @@ struct SettingsSwitch: View {
             Text(title)
             Spacer()
             Toggle(title, isOn: $isOn).labelsHidden().focusable(false)
+        }
+    }
+}
+
+// A key entry box with a "Key saved" / "No key" note beside it.
+struct KeyField: View {
+    let prompt: String
+    @Binding var text: String
+    let saved: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            SecureField(prompt, text: $text)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.edge))
+            if saved { Label("Key saved", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.gold) }
+            else { Label("No key", systemImage: "circle.dashed").foregroundStyle(.secondary) }
         }
     }
 }

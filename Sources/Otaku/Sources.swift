@@ -65,6 +65,9 @@ struct Trailer: Codable, Hashable, Identifiable {
     var thumbnail: URL?
 
     var page: URL? { URL(string: site == "youtube" ? "https://www.youtube.com/watch?v=\(id)" : "https://www.dailymotion.com/video/\(id)") }
+    // YouTube's widescreen still for the video (not every upload has one).
+    var still: URL? { site == "youtube" ? URL(string: "https://i.ytimg.com/vi/\(id)/maxresdefault.jpg") : thumbnail }
+
     var embed: URL? {
         URL(string: site == "youtube" ? "https://www.youtube.com/embed/\(id)?autoplay=1&playsinline=1&rel=0" : "https://www.dailymotion.com/embed/video/\(id)?autoplay=1")
     }
@@ -127,6 +130,8 @@ struct Watch: Codable {
     var buy: [String] = []
     var link: URL?
     var candidates: [Candidate]
+    var direct: [String: URL] = [:] // service name -> straight to the show on that service
+    var source = "JustWatch via TMDB"
 }
 
 enum Net {
@@ -165,6 +170,7 @@ func plain(_ html: String) -> String {
     for (e, c) in ["&quot;": "\"", "&#039;": "'", "&lt;": "<", "&gt;": ">", "&mdash;": "—", "&rsquo;": "’", "&nbsp;": " ", "&amp;": "&"] {
         t = t.replacingOccurrences(of: e, with: c)
     }
+    t = t.replacingOccurrences(of: #"[ \t]*\n[ \t]*"#, with: "\n", options: .regularExpression) // tidy spaces around line breaks
     return t.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
@@ -241,11 +247,12 @@ enum AniList {
     static let rel2 = "id format relations{edges{relationType node{id format relations{edges{relationType node{id format}}}}}}"
 
     static func detail(_ id: String) async throws -> Anime {
-        let d = try await query("query($id:Int){Media(id:$id){\(fields) \(rel2) related:relations{edges{relationType node{type isAdult \(cardFields)}}} recommendations(sort:RATING_DESC,perPage:15){nodes{mediaRecommendation{type isAdult \(cardFields)}}} \(castFields)}}",
+        let d = try await query("query($id:Int){Media(id:$id){\(fields) \(rel2) related:relations{edges{relationType node{type isAdult bannerImage \(cardFields)}}} recommendations(sort:RATING_DESC,perPage:15){nodes{mediaRecommendation{type isAdult \(cardFields)}}} \(castFields)}}",
                                 ["id": Int(id.dropFirst("anilist:".count)) ?? 0])
         guard let m = d.d("Media") else { throw URLError(.badServerResponse) }
         var a = parse(m)
         a.related = related(m.d("related")?.a("edges") ?? [])
+        if a.banner == nil { a.banner = borrowedBanner(m.d("related")?.a("edges") ?? []) }
         a.cast = cast(m.d("characters")?.a("edges") ?? [])
         a.recommended = (m.d("recommendations")?.a("nodes") ?? []).compactMap { $0.d("mediaRecommendation") }
             .filter { $0.s("type") == "ANIME" && $0["isAdult"] as? Bool != true }.map(parse)
@@ -264,6 +271,16 @@ enum AniList {
         a.tvSeasons = chain.tv.count
         a.seasonsMore = !chain.frontier.isEmpty
         return a
+    }
+
+    // No banner of its own: borrow one from the same series (season 1 for a season 2, the show for its movie...).
+    static func borrowedBanner(_ edges: [J]) -> URL? {
+        let order = ["PREQUEL", "PARENT", "SEQUEL", "SIDE_STORY", "ALTERNATIVE", "SPIN_OFF"]
+        return edges.compactMap { e -> (Int, URL)? in
+            guard let n = e.d("node"), n.s("type") == "ANIME", n["isAdult"] as? Bool != true,
+                  let i = order.firstIndex(of: e.s("relationType") ?? ""), let u = n.s("bannerImage").flatMap(URL.init(string:)) else { return nil }
+            return (i, u)
+        }.min { $0.0 < $1.0 }?.1
     }
 
     // Anime only (no manga/novels), in watch order: prequels, sequels, then the rest.
@@ -499,6 +516,69 @@ enum TMDB {
                      seasons: d.i("number_of_seasons"), networks: d.a("networks").compactMap { $0.s("name") },
                      stream: names("flatrate", "free", "ads"), buy: names("rent", "buy"),
                      link: r.s("link").flatMap(URL.init(string:)), candidates: cands)
+    }
+}
+
+// Movie of the Night's Streaming Availability API: per-country availability with direct links,
+// and commercial use is allowed on every plan (TMDB's free key isn't). Keys from their own site or from RapidAPI both work.
+enum MotN {
+    static var viaRapid: Bool? // learned from the first request that works
+
+    static func get(_ path: String, key: String) async throws -> Any {
+        for rapid in viaRapid.map({ [$0] }) ?? [false, true] {
+            var r = URLRequest(url: URL(string: (rapid ? "https://streaming-availability.p.rapidapi.com" : "https://api.movieofthenight.com/v4") + path)!)
+            r.setValue(key, forHTTPHeaderField: rapid ? "X-RapidAPI-Key" : "X-API-Key")
+            if rapid { r.setValue("streaming-availability.p.rapidapi.com", forHTTPHeaderField: "X-RapidAPI-Host") }
+            let (data, resp) = try await Net.session.data(for: r)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 401 || code == 403, viaRapid == nil { continue } // not this kind of key: try the other
+            guard code == 200 else { throw URLError(.badServerResponse) }
+            viaRapid = rapid
+            return try JSONSerialization.jsonObject(with: data)
+        }
+        throw URLError(.userAuthenticationRequired)
+    }
+
+    // Best match first: animated, then closest start year.
+    static func rank(_ shows: [J], year: Int?) -> [J] {
+        func score(_ s: J) -> (Int, Int) {
+            let anim = (s["genres"] as? [J] ?? []).contains { $0.s("id") == "animation" } ? 0 : 1
+            let y = s.i("firstAirYear") ?? s.i("releaseYear") ?? 0
+            return (anim, year.map { abs($0 - y) } ?? 0)
+        }
+        return shows.enumerated().sorted {
+            let (a, b) = (score($0.1), score($1.1))
+            return (a.0, a.1, $0.0) < (b.0, b.1, $1.0)
+        }.map(\.1)
+    }
+
+    static func tmdbId(_ s: J) -> Int? { s.s("tmdbId")?.split(separator: "/").last.flatMap { Int($0) } } // "tv/1429"
+
+    // Turns one show's options for a country into Watch's lists. Rent/buy/addon go under "Rent or buy".
+    static func watch(from s: J, country: String, candidates: [Candidate]) -> Watch {
+        var w = Watch(tmdbId: tmdbId(s) ?? -2, name: s.s("title") ?? "", year: (s.i("firstAirYear") ?? s.i("releaseYear")).map(String.init),
+                      seasons: s.i("seasonCount"), candidates: candidates, source: "Movie of the Night")
+        for o in (s["streamingOptions"] as? J)?.a(country) ?? [] {
+            let svc = o.d("service")
+            guard let name = svc?.s("name") ?? svc?.s("id")?.capitalized else { continue }
+            let paid = ["rent", "buy", "addon"].contains(o.s("type") ?? "")
+            if paid { if !w.buy.contains(name) { w.buy.append(name) } } else if !w.stream.contains(name) { w.stream.append(name) }
+            if w.direct[name] == nil { w.direct[name] = (o.s("link") ?? svc?.s("homePage")).flatMap(URL.init(string:)) }
+        }
+        return w
+    }
+
+    static func watch(for a: Anime, key: String, region: String, pick: Int?) async throws -> Watch {
+        let country = region.lowercased() == "uk" ? "gb" : region.lowercased()
+        var shows: [J] = []
+        for q in TMDB.searchTerms(a.titles) where shows.isEmpty {
+            let path = "/shows/search/title?country=\(country)&show_type=\(a.isMovie ? "movie" : "series")&title=" + Net.enc(q)
+            shows = rank(try await get(path, key: key) as? [J] ?? [], year: a.year.flatMap { Int($0) })
+        }
+        let cands = shows.prefix(10).compactMap { s in tmdbId(s).map { Candidate(id: $0, name: s.s("title") ?? "?", year: (s.i("firstAirYear") ?? s.i("releaseYear")).map(String.init)) } }
+        if pick == -1 { return Watch(candidates: Array(cands), source: "Movie of the Night") }
+        guard let s = pick.flatMap({ p in shows.first { tmdbId($0) == p } }) ?? shows.first else { return Watch(candidates: Array(cands), source: "Movie of the Night") }
+        return watch(from: s, country: country, candidates: Array(cands))
     }
 }
 
