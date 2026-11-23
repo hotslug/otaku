@@ -34,11 +34,86 @@ struct Anime: Codable, Hashable, Identifiable {
     var titles: [String] // English + romaji, for matching on other sites
     var tvSeasons: Int?
     var seasonsMore = false // the sequel chain went further than we looked
+    var nextEpisode: Int?
+    var nextAiring: Date?
+    var related: [Related]? // details page only
+    var recommended: [Anime]? // details page only
+    var trailer: Trailer?
+    var cast: [CastMember]? // details page only
     var year: String? { start.map { String($0.prefix(4)) } }
     var isMovie: Bool { format == "Movie" }
 }
 
-struct Home: Codable { var popular: [Anime]; var trending: [Anime] }
+struct Row: Codable, Identifiable { var title: String; var items: [Anime]; var id: String { title } }
+struct Home: Codable { var rows: [Row] }
+
+struct Related: Codable, Hashable { var relation: String; var anime: Anime }
+
+struct Person: Codable, Hashable { var name: String; var image: URL? }
+
+struct CastMember: Codable, Hashable {
+    var name: String
+    var role: String // Main, Supporting, Background
+    var image: URL?
+    var japanese: Person?
+    var english: Person?
+}
+
+struct Trailer: Codable, Hashable, Identifiable {
+    var id: String
+    var site: String // "youtube" or "dailymotion"
+    var thumbnail: URL?
+
+    var page: URL? { URL(string: site == "youtube" ? "https://www.youtube.com/watch?v=\(id)" : "https://www.dailymotion.com/video/\(id)") }
+    var embed: URL? {
+        URL(string: site == "youtube" ? "https://www.youtube.com/embed/\(id)?autoplay=1&playsinline=1&rel=0" : "https://www.dailymotion.com/embed/video/\(id)?autoplay=1")
+    }
+
+    // YouTube won't play in a bare web view (error 153): the player must sit in a page that names the app.
+    var playerHTML: String {
+        """
+        <html><body style="margin:0;background:#000;overflow:hidden">
+        <iframe style="border:0;width:100vw;height:100vh" src="\(embed?.absoluteString ?? "")"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen
+          referrerpolicy="strict-origin-when-cross-origin"></iframe>
+        </body></html>
+        """
+    }
+    var siteName: String { site == "youtube" ? "YouTube" : "Dailymotion" }
+}
+
+// Search filters. Values are AniList's names; Kitsu gets them translated.
+struct Filters: Codable, Equatable {
+    var genre: String?
+    var year: Int?
+    var format: String?
+    var status: String?
+    var sort = "POPULARITY_DESC"
+
+    static let genres = ["Action", "Adventure", "Comedy", "Drama", "Ecchi", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery",
+                         "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller"]
+    static let formats = [("TV", "TV"), ("MOVIE", "Movie"), ("OVA", "OVA"), ("ONA", "ONA"), ("SPECIAL", "Special"), ("TV_SHORT", "TV short")]
+    static let statuses = [("RELEASING", "Airing now"), ("FINISHED", "Finished"), ("NOT_YET_RELEASED", "Coming soon")]
+    static let sorts = [("POPULARITY_DESC", "Most popular"), ("SCORE_DESC", "Best rated"), ("TRENDING_DESC", "Trending"), ("START_DATE_DESC", "Newest")]
+
+    var active: Bool { genre != nil || year != nil || format != nil || status != nil || sort != Filters().sort }
+    var key: String { [genre ?? "", year.map(String.init) ?? "", format ?? "", status ?? "", sort].joined(separator: "|") }
+}
+
+struct Airing: Codable, Hashable, Identifiable {
+    var anime: Anime
+    var episode: Int
+    var at: Date
+    var id: String { anime.id + "#\(episode)" }
+}
+
+enum Status: String, Codable, CaseIterable { case watching = "Watching", planning = "Plan to watch", finished = "Finished" }
+
+struct Entry: Codable {
+    var anime: Anime
+    var status: Status?
+    var favourite = false
+}
 
 struct Candidate: Codable, Hashable, Identifiable { var id: Int; var name: String; var year: String? }
 
@@ -103,7 +178,7 @@ func nice(_ s: String) -> String {
 }
 
 enum AniList {
-    static let fields = "id title{english romaji native} description(asHtml:false) startDate{year month day} endDate{year month day} status episodes format averageScore popularity genres studios(isMain:true){nodes{name}} coverImage{large} bannerImage externalLinks{site url type notes}"
+    static let fields = "id title{english romaji native} description(asHtml:false) startDate{year month day} endDate{year month day} status episodes format averageScore popularity genres studios(isMain:true){nodes{name}} coverImage{large} bannerImage externalLinks{site url type notes} nextAiringEpisode{episode airingAt} trailer{id site thumbnail}"
 
     static func query(_ q: String, _ vars: J = [:]) async throws -> J {
         var r = URLRequest(url: URL(string: "https://graphql.anilist.co")!)
@@ -114,14 +189,51 @@ enum AniList {
         return d
     }
 
-    static func home() async throws -> Home {
-        func page(_ name: String, _ sort: String) -> String { "\(name): Page(perPage:30){media(type:ANIME,isAdult:false,sort:\(sort)){\(fields)}}" }
-        let d = try await query("{\(page("popular", "POPULARITY_DESC")) \(page("trending", "TRENDING_DESC"))}")
-        return Home(popular: d.d("popular")?.a("media").map(parse) ?? [], trending: d.d("trending")?.a("media").map(parse) ?? [])
+    // Lighter fields for start-page cards; the details page loads the rest.
+    static let cardFields = "id title{english romaji native} startDate{year month day} status episodes format averageScore popularity genres coverImage{large} nextAiringEpisode{episode airingAt}"
+
+    static func season(_ d: Date) -> (String, Int) {
+        let c = Calendar.current.dateComponents([.month, .year], from: d)
+        return (["WINTER", "SPRING", "SUMMER", "FALL"][(c.month! - 1) / 3], c.year!)
     }
 
-    static func search(_ q: String) async throws -> [Anime] {
-        let d = try await query("query($q:String){Page(perPage:30){media(type:ANIME,isAdult:false,search:$q,sort:SEARCH_MATCH){\(fields)}}}", ["q": q])
+    // All start-page rows in one request.
+    static func home(now: Date = Date()) async throws -> Home {
+        let (season, year) = season(now)
+        let rows: [(String, String)] = [
+            ("Trending now", "sort:TRENDING_DESC"),
+            ("Most popular", "sort:POPULARITY_DESC"),
+            ("Airing this season", "season:\(season),seasonYear:\(year),sort:POPULARITY_DESC"),
+            ("Top rated", "sort:SCORE_DESC"),
+            ("Coming soon", "status:NOT_YET_RELEASED,sort:POPULARITY_DESC"),
+            ("Popular in Action", "genre:\"Action\",sort:POPULARITY_DESC"),
+            ("Popular in Romance", "genre:\"Romance\",sort:POPULARITY_DESC"),
+            ("Popular in Comedy", "genre:\"Comedy\",sort:POPULARITY_DESC"),
+            ("Popular in Fantasy", "genre:\"Fantasy\",sort:POPULARITY_DESC"),
+            ("Popular isekai", "tag:\"Isekai\",sort:POPULARITY_DESC"),
+        ]
+        let q = rows.enumerated().map { "r\($0.offset): Page(perPage:20){media(type:ANIME,isAdult:false,\($0.element.1)){\(cardFields)}}" }.joined(separator: " ")
+        let d = try await query("{\(q)}")
+        return Home(rows: rows.enumerated().map { Row(title: $0.element.0, items: d.d("r\($0.offset)")?.a("media").map(parse) ?? []) }.filter { !$0.items.isEmpty })
+    }
+
+    // Only filters that are set go into the query (AniList rejects some of them as null).
+    static func search(_ q: String, _ f: Filters = Filters()) async throws -> [Anime] {
+        var params = ["$sort:[MediaSort]"], args = ["sort:$sort"]
+        // Matches ordered by the chosen sort (popular first by default): AniList's own "best match" can rank obscure shows
+        // first, e.g. "demon slayer" -> Onigiri, whose Japanese title means demon slayer.
+        var vars: [String: Any] = ["sort": [f.sort]]
+        func add(_ name: String, _ type: String, _ arg: String, _ value: Any?) {
+            guard let value else { return }
+            params.append("$\(name):\(type)"); args.append("\(arg):$\(name)"); vars[name] = value
+        }
+        add("q", "String", "search", q.isEmpty ? nil : q)
+        add("genre", "String", "genre", f.genre)
+        add("format", "MediaFormat", "format", f.format)
+        add("status", "MediaStatus", "status", f.status)
+        add("from", "FuzzyDateInt", "startDate_greater", f.year.map { $0 * 10000 })
+        add("to", "FuzzyDateInt", "startDate_lesser", f.year.map { ($0 + 1) * 10000 })
+        let d = try await query("query(\(params.joined(separator: ","))){Page(perPage:40){media(type:ANIME,isAdult:false,\(args.joined(separator: ","))){\(cardFields)}}}", vars)
         return d.d("Page")?.a("media").map(parse) ?? []
     }
 
@@ -129,13 +241,18 @@ enum AniList {
     static let rel2 = "id format relations{edges{relationType node{id format relations{edges{relationType node{id format}}}}}}"
 
     static func detail(_ id: String) async throws -> Anime {
-        let d = try await query("query($id:Int){Media(id:$id){\(fields) \(rel2)}}", ["id": Int(id.dropFirst("anilist:".count)) ?? 0])
+        let d = try await query("query($id:Int){Media(id:$id){\(fields) \(rel2) related:relations{edges{relationType node{type isAdult \(cardFields)}}} recommendations(sort:RATING_DESC,perPage:15){nodes{mediaRecommendation{type isAdult \(cardFields)}}} \(castFields)}}",
+                                ["id": Int(id.dropFirst("anilist:".count)) ?? 0])
         guard let m = d.d("Media") else { throw URLError(.badServerResponse) }
         var a = parse(m)
+        a.related = related(m.d("related")?.a("edges") ?? [])
+        a.cast = cast(m.d("characters")?.a("edges") ?? [])
+        a.recommended = (m.d("recommendations")?.a("nodes") ?? []).compactMap { $0.d("mediaRecommendation") }
+            .filter { $0.s("type") == "ANIME" && $0["isAdult"] as? Bool != true }.map(parse)
         var chain = Chain()
         chain.add([m])
-        // ponytail: up to 3 follow-up requests (~8 more hops); "N+" beyond that.
-        for _ in 0..<3 where !chain.frontier.isEmpty {
+        // ponytail: up to 5 follow-up requests (2 hops each; long series like Attack on Titan need 4); "N+" beyond that.
+        for _ in 0..<5 where !chain.frontier.isEmpty {
             let ids = chain.frontier
             chain.frontier = []
             guard let more = try? await query("query($ids:[Int]){Page(perPage:50){media(id_in:$ids){\(rel2)}}}", ["ids": ids]) else {
@@ -149,6 +266,20 @@ enum AniList {
         return a
     }
 
+    // Anime only (no manga/novels), in watch order: prequels, sequels, then the rest.
+    static let relationOrder = ["PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SPIN_OFF", "ALTERNATIVE", "SUMMARY", "CHARACTER", "OTHER", "COMPILATION", "CONTAINS"]
+
+    static func related(_ edges: [J]) -> [Related] {
+        edges.compactMap { e -> (Int, Related)? in
+            guard let n = e.d("node"), n.s("type") == "ANIME", n["isAdult"] as? Bool != true, let r = e.s("relationType") else { return nil }
+            let a = parse(n)
+            let label = r == "SIDE_STORY" ? "Side story" : r == "SPIN_OFF" ? "Spin-off" : r == "PARENT" ? "Main story"
+                : (r == "ALTERNATIVE" || r == "OTHER") && a.format == "Movie" ? "Movie" : nice(r)
+            return (relationOrder.firstIndex(of: r) ?? relationOrder.count, Related(relation: label, anime: a))
+        }
+        .enumerated().sorted { ($0.element.0, $0.offset) < ($1.element.0, $1.offset) }.map(\.element.1)
+    }
+
     // Counts TV entries linked by sequel/prequel (through movies/OVAs too).
     struct Chain {
         var seen = Set<Int>(), tv = Set<Int>(), frontier: [Int] = [] // frontier: reached, but links not loaded yet
@@ -159,7 +290,8 @@ enum AniList {
             guard let id = n.i("id") else { return }
             guard seen.insert(id).inserted || root else { return }
             if ["TV", "TV_SHORT"].contains(n.s("format") ?? "") { tv.insert(id) }
-            guard let edges = n.d("relations")?.a("edges") else { frontier.append(id); return }
+            // Missing or empty below the top: AniList sometimes leaves nested lists empty, so load it next round.
+            guard let edges = n.d("relations")?.a("edges"), root || !edges.isEmpty else { frontier.append(id); return }
             for e in edges where ["SEQUEL", "PREQUEL"].contains(e.s("relationType") ?? "") {
                 if let c = e.d("node") { walk(c, root: false) }
             }
@@ -173,6 +305,12 @@ enum AniList {
     }
 
     static func parse(_ m: J) -> Anime {
+        var a = card(m)
+        a.trailer = trailer(m.d("trailer"))
+        return a
+    }
+
+    static func card(_ m: J) -> Anime {
         let t = m.d("title") ?? [:]
         return Anime(
             id: "anilist:\(m.i("id") ?? 0)",
@@ -189,7 +327,58 @@ enum AniList {
             links: m.a("externalLinks").filter { $0.s("type") == "STREAMING" }.compactMap { l in
                 l.s("url").flatMap(URL.init(string:)).map { StreamLink(site: l.s("site") ?? $0.host ?? "", url: $0, note: l.s("notes")) }
             },
-            titles: [t.s("english"), t.s("romaji")].compactMap { $0 })
+            titles: [t.s("english"), t.s("romaji")].compactMap { $0 },
+            nextEpisode: m.d("nextAiringEpisode")?.i("episode"),
+            nextAiring: m.d("nextAiringEpisode")?.i("airingAt").map { Date(timeIntervalSince1970: TimeInterval($0)) })
+    }
+
+    static let castFields = "characters(sort:[ROLE,RELEVANCE,ID],perPage:20){edges{role node{name{full} image{medium}} jp:voiceActors(language:JAPANESE,sort:[RELEVANCE,ID]){name{full} image{medium}} en:voiceActors(language:ENGLISH,sort:[RELEVANCE,ID]){name{full} image{medium}}}}"
+
+    static func cast(_ edges: [J]) -> [CastMember] {
+        func person(_ v: [J]) -> Person? {
+            v.first.flatMap { p in p.d("name")?.s("full").map { Person(name: $0, image: p.d("image")?.s("medium").flatMap(URL.init(string:))) } }
+        }
+        return edges.compactMap { e in
+            guard let n = e.d("node"), let name = n.d("name")?.s("full") else { return nil }
+            return CastMember(name: name, role: nice(e.s("role") ?? ""), image: n.d("image")?.s("medium").flatMap(URL.init(string:)),
+                              japanese: person(e.a("jp")), english: person(e.a("en")))
+        }
+    }
+
+    static func trailer(_ t: J?) -> Trailer? {
+        guard let t, let id = t.s("id")?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty, // some ids end in a tab
+              let site = t.s("site"), ["youtube", "dailymotion"].contains(site) else { return nil }
+        return Trailer(id: id, site: site, thumbnail: t.s("thumbnail").flatMap(URL.init(string:)))
+    }
+
+    // Every episode airing between two dates (a week is ~5 pages of 50).
+    static func schedule(from: Date, to: Date) async throws -> [Airing] {
+        var out: [Airing] = []
+        for page in 1...10 {
+            let d = try await query("query($p:Int,$a:Int,$b:Int){Page(page:$p,perPage:50){pageInfo{hasNextPage} airingSchedules(airingAt_greater:$a,airingAt_lesser:$b,sort:TIME){episode airingAt media{isAdult \(fields)}}}}",
+                                    ["p": page, "a": Int(from.timeIntervalSince1970), "b": Int(to.timeIntervalSince1970)])
+            let p = d.d("Page")
+            for s in p?.a("airingSchedules") ?? [] {
+                guard let m = s.d("media"), m["isAdult"] as? Bool != true, let ep = s.i("episode"), let at = s.i("airingAt") else { continue }
+                out.append(Airing(anime: parse(m), episode: ep, at: Date(timeIntervalSince1970: TimeInterval(at))))
+            }
+            if p?.d("pageInfo")?["hasNextPage"] as? Bool != true { break }
+        }
+        return out
+    }
+
+    // For new-episode alerts: what aired for these shows in a time window, and each one's next episode.
+    static func airing(ids: [Int], from: Date, to: Date) async throws -> (aired: [(id: Int, episode: Int)], next: [Int: (Int, Date)?]) {
+        let d = try await query("query($ids:[Int],$a:Int,$b:Int){aired:Page(perPage:50){airingSchedules(mediaId_in:$ids,airingAt_greater:$a,airingAt_lesser:$b,sort:TIME){episode mediaId}} next:Page(perPage:50){media(id_in:$ids){id nextAiringEpisode{episode airingAt}}}}",
+                                ["ids": ids, "a": Int(from.timeIntervalSince1970), "b": Int(to.timeIntervalSince1970)])
+        let aired = d.d("aired")?.a("airingSchedules").compactMap { s in s.i("mediaId").flatMap { id in s.i("episode").map { (id: id, episode: $0) } } } ?? []
+        var next: [Int: (Int, Date)?] = [:]
+        for m in d.d("next")?.a("media") ?? [] {
+            guard let id = m.i("id") else { continue }
+            let n = m.d("nextAiringEpisode")
+            next[id] = n?.i("episode").flatMap { ep in n?.i("airingAt").map { (ep, Date(timeIntervalSince1970: TimeInterval($0))) } }
+        }
+        return (aired, next)
     }
 }
 
@@ -204,12 +393,17 @@ enum Kitsu {
 
     static func home() async throws -> Home {
         async let p = get("anime?sort=-userCount&page%5Blimit%5D=20")
-        async let t = get("trending/anime?limit=20")
-        return try await Home(popular: list(p), trending: list(t))
+        async let t = get("anime?filter%5Bstatus%5D=current&sort=-userCount&page%5Blimit%5D=20") // its trending list is stale
+        return try await Home(rows: [Row(title: "Airing now", items: list(t)), Row(title: "Most popular", items: list(p))])
     }
 
-    static func search(_ q: String) async throws -> [Anime] {
-        list(try await get("anime?page%5Blimit%5D=20&filter%5Btext%5D=" + Net.enc(q)))
+    static func search(_ q: String, _ f: Filters = Filters()) async throws -> [Anime] {
+        var p = ["page[limit]=20"]
+        if !q.isEmpty { p.append("filter[text]=" + Net.enc(q)) } else { p.append(f.sort == "SCORE_DESC" ? "sort=-averageRating" : f.sort == "START_DATE_DESC" ? "sort=-startDate" : "sort=-userCount") }
+        if let y = f.year { p.append("filter[seasonYear]=\(y)") }
+        if let s = ["RELEASING": "current", "FINISHED": "finished", "NOT_YET_RELEASED": "upcoming"][f.status ?? ""] { p.append("filter[status]=" + s) }
+        if let t = ["TV": "TV", "MOVIE": "movie", "OVA": "OVA", "ONA": "ONA", "SPECIAL": "special"][f.format ?? ""] { p.append("filter[subtype]=" + t) }
+        return list(try await get("anime?" + p.joined(separator: "&").replacingOccurrences(of: "[", with: "%5B").replacingOccurrences(of: "]", with: "%5D")))
     }
 
     static func detail(id: String) async throws -> Anime {

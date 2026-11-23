@@ -1,11 +1,36 @@
 import Foundation
+import SwiftUI
+
+enum Tab: String, CaseIterable {
+    case discover = "Discover", list = "My list", schedule = "Schedule"
+    var icon: String { ["Discover": "sparkles", "My list": "list.star", "Schedule": "calendar"][rawValue]! }
+}
 
 @MainActor final class Store: ObservableObject {
     static let shared = Store()
 
+    @Published var tab = Tab.discover
+    @Published var appearance = Appearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .dark { // the night sky by default
+        didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance"); appearance.apply() }
+    }
+    @Published var rowScroll: [String: ScrollPosition] = [:] // per row title
+    @Published var rowX: [String: CGFloat] = [:] // how far each row is scrolled
+    @Published var rowEnd: [String: CGFloat] = [:] // furthest it can scroll
+    @Published var hoverRow: String?
+    @Published var hoverCard: String?
+    @Published var expandedLinks: Set<String> = [] // link lists showing "+N more" expanded
+    @Published var schedule: [Airing]?
+    @Published var onlyMine = UserDefaults.standard.bool(forKey: "onlyMine") { didSet { UserDefaults.standard.set(onlyMine, forKey: "onlyMine") } }
+    @Published var alertsOn = UserDefaults.standard.object(forKey: "alertsOn") as? Bool ?? true { didSet { UserDefaults.standard.set(alertsOn, forKey: "alertsOn") } }
+    @Published var list: [String: Entry] = Store.loadList() { didSet { saveList() } }
+
     @Published var home: Home?
     @Published var query = ""
+    @Published var filters = Filters() { didSet { if filters != oldValue { Task { await search() } } } }
     @Published var results: [Anime]?
+    @Published var searching = false
+    @Published var playing: Trailer? // trailer shown in the player sheet
+    @Published var englishCast = UserDefaults.standard.bool(forKey: "englishCast") { didSet { UserDefaults.standard.set(englishCast, forKey: "englishCast") } }
     @Published var resultsFor = ""
     @Published var path: [Anime] = []
     @Published var details: [String: Anime] = [:]
@@ -39,14 +64,36 @@ import Foundation
     }
 
     func loadHome() async {
-        if home == nil { home = await fetch("home", [AniList.home, Kitsu.home]) }
+        if home == nil { home = await fetch("home-rows", [{ try await AniList.home() }, { try await Kitsu.home() }]) }
     }
 
+    // Runs for a search term, filters, or both.
     func search() async {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { results = nil; return }
-        results = await fetch("search:" + q.lowercased(), [{ try await AniList.search(q) }, { try await Kitsu.search(q) }]) ?? []
+        let q = query.trimmingCharacters(in: .whitespaces), f = filters
+        guard !q.isEmpty || f.active else { results = nil; searching = false; return }
+        searching = true
+        if ProcessInfo.processInfo.environment["OTAKU_LOG"] != nil { FileHandle.standardError.write(Data("search: \(q.isEmpty ? "(filters)" : q)\n".utf8)) }
+        let r = await fetch("search:\(q.lowercased()):\(f.key)", [{ try await AniList.search(q, f) }, { try await Kitsu.search(q, f) }]) ?? []
+        guard q == query.trimmingCharacters(in: .whitespaces), f == filters else { return } // changed while loading
+        searching = false
+        results = r
         resultsFor = q
+    }
+
+    // Search as you type: waits for a short pause, so a word costs one request, not one per letter.
+    var typing: Task<Void, Never>?
+
+    func typed() {
+        typing?.cancel()
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard q.isEmpty || q.count >= 2 else { return } // one letter: wait for more
+        typing = Task {
+            if !q.isEmpty { try? await Task.sleep(for: .milliseconds(550)) }
+            guard !Task.isCancelled, q == query.trimmingCharacters(in: .whitespaces) else { return }
+            if !q.isEmpty, tab != .discover || !path.isEmpty { tab = .discover; path = [] } // typing elsewhere: show the results
+            if !q.isEmpty, q == resultsFor, results != nil { return } // already showing these
+            await search() // empty: back to filters only, or the start page
+        }
     }
 
     func retry() async {
@@ -76,5 +123,87 @@ import Foundation
         UserDefaults.standard.set(tmdbId, forKey: "tmdb." + a.id)
         watch[a.id] = nil
         Task { await loadWatch(a) }
+    }
+
+    // MARK: My list. Saved in Application Support (not Caches: this is the user's data).
+
+    nonisolated static let listFile: URL = {
+        if let test = ProcessInfo.processInfo.environment["OTAKU_LIST"] { return URL(fileURLWithPath: test) } // for layout checks
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Otaku")
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d.appendingPathComponent("list.json")
+    }()
+
+    nonisolated static func loadList(from file: URL = listFile) -> [String: Entry] {
+        guard let data = try? Data(contentsOf: file) else { return [:] }
+        if let l = try? JSONDecoder().decode([String: Entry].self, from: data) { return l }
+        // Unreadable: keep it aside instead of overwriting it on the next save.
+        try? FileManager.default.moveItem(at: file, to: file.appendingPathExtension("broken-\(Int(Date().timeIntervalSince1970))"))
+        return [:]
+    }
+
+    func saveList() {
+        try? JSONEncoder().encode(list).write(to: Self.listFile, options: .atomic)
+    }
+
+    func setStatus(_ a: Anime, _ s: Status?) {
+        var e = list[a.id] ?? Entry(anime: a)
+        e.status = s
+        put(a.id, e)
+        if s == .watching || s == .planning { Alerts.ask() }
+    }
+
+    func toggleFavourite(_ a: Anime) {
+        var e = list[a.id] ?? Entry(anime: a)
+        e.favourite.toggle()
+        put(a.id, e)
+    }
+
+    func put(_ id: String, _ e: Entry) { list[id] = e.status == nil && !e.favourite ? nil : e }
+
+    func open(_ id: String) {
+        guard let e = list[id] else { return }
+        tab = .list
+        path = [e.anime]
+    }
+
+    // MARK: Schedule
+
+    func loadSchedule(force: Bool = false) async {
+        guard schedule == nil || force else { return }
+        let start = Calendar.current.startOfDay(for: Date())
+        let end = Calendar.current.date(byAdding: .day, value: 7, to: start)!
+        let day = ISO8601DateFormatter.string(from: start, timeZone: .current, formatOptions: [.withFullDate])
+        schedule = await fetch("schedule:" + day, [{ try await AniList.schedule(from: start, to: end) }]) ?? []
+    }
+
+    // MARK: New-episode alerts
+
+    // Shows to alert on: on the list, not finished, from AniList (Kitsu has no airing times).
+    static func alertIds(_ list: [String: Entry]) -> [Int] {
+        list.filter { $0.value.status != .finished && ($0.value.status != nil || $0.value.favourite) }
+            .compactMap { $0.key.hasPrefix("anilist:") ? Int($0.key.dropFirst("anilist:".count)) : nil }.sorted()
+    }
+
+    func checkAiring(now: Date = Date()) async {
+        let ids = Self.alertIds(list)
+        let last = UserDefaults.standard.object(forKey: "lastAiringCheck") as? Date
+        guard !ids.isEmpty else { UserDefaults.standard.set(now, forKey: "lastAiringCheck"); return }
+        if alertsOn { Alerts.ask() } // no-op once you've answered macOS's prompt
+        // First check ever: look back only an hour, so adding a show doesn't dump old episodes on you.
+        let from = max(last ?? now.addingTimeInterval(-3600), now.addingTimeInterval(-7 * 86400))
+        guard let r = try? await AniList.airing(ids: ids, from: from, to: now) else { return } // retry next time, same window
+        UserDefaults.standard.set(now, forKey: "lastAiringCheck")
+        for (id, next) in r.next {
+            guard var e = list["anilist:\(id)"] else { continue }
+            e.anime.nextEpisode = next?.0
+            e.anime.nextAiring = next?.1
+            list["anilist:\(id)"] = e
+        }
+        guard alertsOn else { return }
+        for a in r.aired {
+            guard let e = list["anilist:\(a.id)"] else { continue }
+            Alerts.post(title: e.anime.title, body: "Episode \(a.episode) is out", id: "anilist:\(a.id)")
+        }
     }
 }
