@@ -242,21 +242,3 @@ struct SettingsView: View {
         .frame(width: 460)
     }
 }
-
-enum Icon {
-    // Pink-to-purple tile with オ (the "o" of otaku).
-    static func write(to path: String) -> Bool {
-        let size = 1024.0
-        let img = NSImage(size: NSSize(width: size, height: size), flipped: false) { r in
-            let tile = NSBezierPath(roundedRect: r.insetBy(dx: 100, dy: 100), xRadius: 185, yRadius: 185)
-            NSGradient(starting: NSColor(red: 1, green: 0.42, blue: 0.62, alpha: 1), ending: NSColor(red: 0.45, green: 0.3, blue: 0.95, alpha: 1))!
-                .draw(in: tile, angle: -60)
-            let s = NSAttributedString(string: "オ", attributes: [.font: NSFont.systemFont(ofSize: 560, weight: .heavy), .foregroundColor: NSColor.white])
-            let b = s.size()
-            s.draw(at: NSPoint(x: (size - b.width) / 2, y: (size - b.height) / 2))
-            return true
-        }
-        guard let tiff = img.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return false }
-        return (try? png.write(to: URL(fileURLWithPath: path))) != nil
-    }
-}
