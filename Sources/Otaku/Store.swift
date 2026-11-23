@@ -10,6 +10,11 @@ enum Tab: String, CaseIterable {
     static let shared = Store()
 
     @Published var tab = Tab.discover
+    @Published var inMenuBar = UserDefaults.standard.object(forKey: "inMenuBar") as? Bool ?? true { didSet { UserDefaults.standard.set(inMenuBar, forKey: "inMenuBar") } }
+    var scheduleDay = "" // the day the loaded week starts on
+
+    // This week's episodes for shows on My list (favourites included).
+    var myEpisodes: [Airing] { (schedule ?? []).filter { list[$0.anime.id] != nil }.sorted { $0.at < $1.at } }
     @Published var appearance = Appearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .dark { // the night sky by default
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance"); appearance.apply() }
     }
@@ -170,10 +175,11 @@ enum Tab: String, CaseIterable {
     // MARK: Schedule
 
     func loadSchedule(force: Bool = false) async {
-        guard schedule == nil || force else { return }
         let start = Calendar.current.startOfDay(for: Date())
         let end = Calendar.current.date(byAdding: .day, value: 7, to: start)!
         let day = ISO8601DateFormatter.string(from: start, timeZone: .current, formatOptions: [.withFullDate])
+        guard schedule == nil || force || day != scheduleDay else { return } // a new day: reload
+        scheduleDay = day
         schedule = await fetch("schedule:" + day, [{ try await AniList.schedule(from: start, to: end) }]) ?? []
     }
 

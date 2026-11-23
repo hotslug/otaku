@@ -9,13 +9,19 @@ struct OtakuApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView(store: .shared).frame(minWidth: 720, minHeight: 520)
                 .tint(Theme.pink)
         }
         .restorationBehavior(.disabled) // always open a window on launch (it stays running with none, for alerts)
         .defaultSize(width: 1240, height: 860)
         Settings { SettingsView(store: .shared).tint(Theme.pink) }
+        MenuBarExtra(isInserted: Binding(get: { Store.shared.inMenuBar }, set: { Store.shared.inMenuBar = $0 })) {
+            MenuBarPanel(store: .shared).tint(Theme.pink)
+        } label: {
+            MenuBarLabel(store: .shared)
+        }
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -23,6 +29,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillFinishLaunching(_ n: Notification) {
         let env = ProcessInfo.processInfo.environment
         if let out = env["OTAKU_ICON"] { exit(Icon.write(to: out) ? 0 : 1) }
+        if let out = env["OTAKU_MENU_ICON"] { // preview of the menu bar icon, 8x size, white on dark and black on light
+            let img = NSImage(size: NSSize(width: 320, height: 160), flipped: false) { _ in
+                NSColor(white: 0.15, alpha: 1).setFill(); NSRect(x: 0, y: 0, width: 160, height: 160).fill()
+                NSColor(white: 0.93, alpha: 1).setFill(); NSRect(x: 160, y: 0, width: 160, height: 160).fill()
+                for (x, c) in [(8.0, NSColor.white), (168, NSColor.black)] {
+                    let tinted = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { r in
+                        MenuBarLabel.icon.draw(in: r); c.set(); r.fill(using: .sourceAtop); return true
+                    }
+                    tinted.draw(in: NSRect(x: x, y: 8, width: 144, height: 144))
+                }
+                return true
+            }
+            let png = img.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) }
+            exit((try? png?.write(to: URL(fileURLWithPath: out))) != nil ? 0 : 1)
+        }
         if env["OTAKU_SELFTEST"] != nil { exit(SelfTest.run()) }
         NSApp.setActivationPolicy(.regular) // `swift run` has no bundle; make it a normal app
         if Alerts.available { UNUserNotificationCenter.current().delegate = self }
@@ -35,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Task { @MainActor in
             while true {
                 await Store.shared.checkAiring()
+                await Store.shared.loadSchedule() // once a day; feeds the menu bar
                 try? await Task.sleep(for: .seconds(15 * 60))
             }
         }
@@ -96,6 +118,12 @@ struct ContentView: View {
             let env = ProcessInfo.processInfo.environment
             if let t = env["OTAKU_TAB"].flatMap(Tab.init(rawValue:)) { store.tab = t }
             if env["OTAKU_SETTINGS"] != nil { openSettings() }
+            if let out = env["OTAKU_MENU_SNAPSHOT"] { // layout check: draw the menu bar panel to a PNG
+                await store.loadSchedule()
+                let r = ImageRenderer(content: MenuBarPanel(store: store).environment(\.colorScheme, .dark))
+                r.scale = 2
+                if let img = r.nsImage, let tiff = img.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out)) }
+            }
             if let word = env["OTAKU_TYPE"] { // types a word letter by letter, like a person
                 for i in 1...word.count {
                     store.query = String(word.prefix(i))
@@ -1095,8 +1123,9 @@ struct SettingsView: View {
 
             SettingsCard(title: "New episode alerts") {
                 SettingsSwitch(title: "Tell me when a new episode is out", isOn: $store.alertsOn)
+                SettingsSwitch(title: "Show in the menu bar", isOn: $store.inMenuBar)
                 SettingsSwitch(title: "Open Otaku at login", isOn: Binding(get: { Alerts.openAtLogin }, set: { Alerts.openAtLogin = $0; store.objectWillChange.send() }))
-                Text("Covers shows on My list that aren't Finished. Alerts only arrive while Otaku is running; closing its window keeps it running.")
+                Text("Covers shows on My list that aren't Finished. Alerts only arrive while Otaku is running; closing its window keeps it running. The menu bar shows what from My list airs today.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
 
