@@ -14,6 +14,9 @@ import Foundation
         Task {
             var step = ""
             do {
+                step = "fallback notice"
+                let fb = await Store.shared.fetch("selftest-fallback", [{ throw URLError(.timedOut) }, { 1 }])
+                check(fb == 1 && Store.shared.fallback, "fetch: backup answer is flagged")
                 step = "AniList.home()"
                 let h = try await AniList.home()
                 check(h.rows.count == 10 && h.rows.allSatisfy { $0.items.count == 20 }, "anilist home: all 10 rows full")

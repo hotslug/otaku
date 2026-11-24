@@ -112,7 +112,7 @@ struct ContentView: View {
                         }
                     }
             }
-            .searchable(text: $store.query, placement: .toolbar, prompt: "Search anime")
+            .searchable(text: $store.query, placement: .toolbar, prompt: "Search anime  (⌘F)")
             .onSubmit(of: .search) { store.typing?.cancel(); store.path = []; store.tab = .discover; Task { await store.search() } }
             .toolbar {
                 ToolbarItem(placement: .principal) {
@@ -189,6 +189,15 @@ struct Banners: View {
         if store.stale {
             Label("Showing saved data: AniList and Kitsu can't be reached right now.", systemImage: "wifi.slash")
                 .foregroundStyle(.orange)
+        } else if store.fallback {
+            HStack(spacing: 10) {
+                Label("AniList isn't answering right now, so this is from Kitsu. Some rows, trailers and recommendations may be missing.", systemImage: "arrow.triangle.branch")
+                    .foregroundStyle(.orange)
+                Button { Task { await store.retry() } } label: { Label("Try AniList again", systemImage: "arrow.clockwise") }
+                    .buttonStyle(ChipStyle())
+                    .focusable(false)
+                    .help("Reload from AniList")
+            }
         }
         if let e = store.error {
             HStack {

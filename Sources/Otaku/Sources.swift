@@ -203,6 +203,7 @@ enum AniList {
     static let fields = "id title{english romaji native} description(asHtml:false) startDate{year month day} endDate{year month day} status episodes format averageScore popularity genres studios(isMain:true){nodes{name}} coverImage{large} bannerImage externalLinks{site url type notes} nextAiringEpisode{episode airingAt} trailer{id site thumbnail}"
 
     static func query(_ q: String, _ vars: J = [:]) async throws -> J {
+        if ProcessInfo.processInfo.environment["OTAKU_NO_ANILIST"] != nil { throw URLError(.cannotConnectToHost) } // test: AniList down
         var r = URLRequest(url: URL(string: "https://graphql.anilist.co")!)
         r.httpMethod = "POST"
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")

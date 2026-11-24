@@ -47,6 +47,7 @@ enum Tab: String, CaseIterable {
     @Published var path: [Anime] = []
     @Published var details: [String: Anime] = [:]
     @Published var watch: [String: Watch] = [:]
+    @Published var fallback = false // AniList didn't answer, so this came from the backup (Kitsu)
     @Published var stale = false // showing saved data because every source failed
     @Published var error: String?
     @Published var tmdbKey = UserDefaults.standard.string(forKey: "tmdbKey") ?? "" {
@@ -65,10 +66,10 @@ enum Tab: String, CaseIterable {
     // Tries each source in order; saves the first answer, or falls back to the last saved one.
     func fetch<T: Codable>(_ cacheKey: String, _ sources: [() async throws -> T], main: Bool = true) async -> T? {
         let file = Cache.url(cacheKey)
-        for source in sources {
+        for (i, source) in sources.enumerated() {
             if let v = try? await source() {
                 try? JSONEncoder().encode(v).write(to: file)
-                if main { stale = false; error = nil }
+                if main { stale = false; error = nil; fallback = i > 0 }
                 return v
             }
         }
@@ -153,7 +154,7 @@ enum Tab: String, CaseIterable {
     }
 
     func retry() async {
-        error = nil
+        error = nil; fallback = false
         if results != nil { await search() } else { home = nil; await loadHome() }
     }
 
