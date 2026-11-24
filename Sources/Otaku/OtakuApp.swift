@@ -436,12 +436,18 @@ struct ScheduleView: View {
                 if store.schedule != nil, items.isEmpty {
                     Text(store.onlyMine ? "Nothing from your list airs this week." : "Nothing scheduled.").foregroundStyle(.secondary)
                 }
-                ForEach(days.keys.sorted(), id: \.self) { day in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(Calendar.current.isDateInToday(day) ? "Today" : Calendar.current.isDateInTomorrow(day) ? "Tomorrow" : day.formatted(.dateTime.weekday(.wide).day().month()))
-                            .font(.title3.bold())
-                        ForEach(days[day]!.sorted { $0.at < $1.at }) { s in
-                            NavigationLink(value: s.anime) { ScheduleRow(s: s, status: store.list[s.anime.id]) }.buttonStyle(.plain)
+                TimelineView(.everyMinute) { t in
+                    VStack(alignment: .leading, spacing: 24) {
+                        ForEach(days.keys.sorted(), id: \.self) { day in
+                            let all = days[day]!.sorted { $0.at < $1.at }
+                            let aired = all.filter { $0.at <= t.date }, next = all.filter { $0.at > t.date }
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(Calendar.current.isDateInToday(day) ? "Today" : Calendar.current.isDateInTomorrow(day) ? "Tomorrow" : day.formatted(.dateTime.weekday(.wide).day().month()))
+                                    .font(.title3.bold())
+                                grid(aired).opacity(0.45).help("Already aired")
+                                if !aired.isEmpty, !next.isEmpty { NowLine(at: t.date) }
+                                grid(next)
+                            }
                         }
                     }
                 }
@@ -449,6 +455,30 @@ struct ScheduleView: View {
             .padding(24)
         }
         .task { await store.loadSchedule() }
+    }
+
+    // Columns as the window allows, so the page isn't one long list down the left.
+    @ViewBuilder func grid(_ items: [Airing]) -> some View {
+        if !items.isEmpty {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 380), spacing: 24, alignment: .leading)], alignment: .leading, spacing: 4) {
+                ForEach(items) { s in
+                    NavigationLink(value: s.anime) { ScheduleRow(s: s, status: store.list[s.anime.id]) }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+// Between today's aired and upcoming episodes.
+struct NowLine: View {
+    let at: Date
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Now · " + at.formatted(date: .omitted, time: .shortened)).font(.caption.bold()).foregroundStyle(Theme.pink)
+            Capsule().fill(Theme.sunset).frame(height: 2)
+        }
+        .padding(.vertical, 6)
     }
 }
 
