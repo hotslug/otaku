@@ -99,6 +99,7 @@ import Foundation
     }
 
     static func run() -> Int32 {
+        check(prettyDate("2023-09-29")?.contains("2023") == true && prettyDate("2023-09-29") != "2023-09-29" && prettyDate("2023") == "2023" && prettyDate(nil) == nil, "pretty dates")
         check(Import.tag("my_status", in: "<anime><series_animedb_id>21</series_animedb_id><my_status>Plan to Watch</my_status></anime>") == "Plan to Watch"
               && Import.status(mal: "Plan to Watch") == .planning && Import.status(mal: "Dropped") == nil && Import.status(anilist: "COMPLETED") == .finished, "import: MAL/AniList statuses")
         check(Filters.shift("FALL 2026", by: 1) == "WINTER 2027" && Filters.shift("WINTER 2027", by: -1) == "FALL 2026", "season steps wrap the year")

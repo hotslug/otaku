@@ -919,6 +919,7 @@ struct DetailView: View {
                     BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster)
                         .frame(height: 160).frame(maxWidth: .infinity).clipped()
                         .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .mask(LinearGradient(stops: [.init(color: .black, location: 0.45), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom)) // melts into the sky
                 }
                 HStack(alignment: .top, spacing: 22) {
                     Poster(url: a.poster, width: 200, height: 290)
@@ -1044,8 +1045,8 @@ struct DetailView: View {
         if loading { SkeletonLines(widths: [180, 150, 120, 90, 110, 70, 100, 130, 220]).transition(.identity) }
         else {
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
-                row("Started", a.start)
-                row("Ended", a.end)
+                row("Started", prettyDate(a.start))
+                row("Ended", prettyDate(a.end))
                 row("Status", a.status)
                 row("Format", a.format)
                 row("Seasons", seasons(a))
@@ -1487,4 +1488,16 @@ struct SettingsCard<Content: View>: View {
     let app = Bundle.main.bundleURL
     guard app.pathExtension == "app" else { NSApp.terminate(nil); return }
     NSWorkspace.shared.recycle([app]) { _, _ in NSApp.terminate(nil) }
+}
+
+// "2023-09-29" → "29 Sep 2023", "2023-09" → "Sep 2023"; a bare year stays as it is.
+func prettyDate(_ s: String?) -> String? {
+    guard let s else { return nil }
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    for (from, to) in [("yyyy-MM-dd", "d MMM yyyy"), ("yyyy-MM", "MMM yyyy")] where s.count == from.count {
+        f.dateFormat = from
+        if let d = f.date(from: s) { f.locale = .current; f.setLocalizedDateFormatFromTemplate(to); return f.string(from: d) }
+    }
+    return s
 }
