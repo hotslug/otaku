@@ -161,9 +161,11 @@ enum Tab: String, CaseIterable {
     func loadDetail(_ a: Anime) async {
         if details[a.id] == nil {
             let title = a.titles.first ?? a.title
-            details[a.id] = await fetch("detail:" + a.id, a.id.hasPrefix("kitsu:")
+            var d = await fetch("detail:" + a.id, a.id.hasPrefix("kitsu:")
                 ? [{ try await Kitsu.detail(id: a.id) }]
                 : [{ try await AniList.detail(a.id) }, { try await Kitsu.detail(title: title) }]) ?? a
+            if let t = d.trailer, await !t.alive() { d.trailer = nil } // checked before the page shows, so nothing jumps
+            details[a.id] = d
         }
         await loadWatch(a)
     }

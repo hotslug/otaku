@@ -75,6 +75,10 @@ import Foundation
                 check(d.cast?.first?.role == "Main" && d.cast?.first?.japanese != nil, "AoT cast: main characters first, with voices")
                 print("AoT trailer:", d.trailer?.page?.absoluteString ?? "none")
                 check(d.trailer?.embed != nil, "AoT has a trailer")
+                step = "Trailer.alive()"
+                check(await Trailer(id: "dQw4w9WgXcQ", site: "youtube").alive(), "a live YouTube video is alive")
+                check(await !Trailer(id: "xxxxxxxxxxx", site: "youtube").alive(), "a missing YouTube video is dead")
+                check(await !Trailer(id: "xzzzzzzzzz", site: "dailymotion").alive(), "a missing Dailymotion video is dead")
                 check(d.tvSeasons ?? 0 >= 5, "AoT season chain with related + recs in the same request: \(d.tvSeasons ?? -1)")
                 print("AoT seasons:", d.tvSeasons ?? -1, d.seasonsMore, "links:", d.links.map(\.site), "synopsis:", d.synopsis.prefix(80))
                 step = "Kitsu.detail(title: 'Frieren')"

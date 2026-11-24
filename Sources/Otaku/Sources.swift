@@ -68,6 +68,14 @@ struct Trailer: Codable, Hashable, Identifiable {
     // YouTube's widescreen still for the video (not every upload has one).
     var still: URL? { site == "youtube" ? URL(string: "https://i.ytimg.com/vi/\(id)/maxresdefault.jpg") : thumbnail }
 
+    // False only when the site says the video is gone, private or won't embed (any 4xx); offline or a hiccup counts as alive.
+    func alive() async -> Bool {
+        let check = site == "youtube" ? "https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=\(id)"
+                                      : "https://api.dailymotion.com/video/\(id)?fields=id"
+        guard let u = URL(string: check), let (_, r) = try? await Net.session.data(from: u), let code = (r as? HTTPURLResponse)?.statusCode else { return true }
+        return !(400..<500).contains(code)
+    }
+
     var embed: URL? {
         URL(string: site == "youtube" ? "https://www.youtube.com/embed/\(id)?autoplay=1&playsinline=1&rel=0" : "https://www.dailymotion.com/embed/video/\(id)?autoplay=1")
     }
