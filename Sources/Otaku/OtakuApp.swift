@@ -971,7 +971,7 @@ struct DetailView: View {
                             HStack(alignment: .top, spacing: 36) {
                                 stats(a, loading: loading).fixedSize()
                                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.statsWidth = $0 }
-                                synopsis(a, loading: loading).frame(maxWidth: 680, alignment: .leading)
+                                synopsis(a, loading: loading)
                             }
                         } else {
                             VStack(alignment: .leading, spacing: 18) {
@@ -1092,7 +1092,7 @@ struct DetailView: View {
 
     @ViewBuilder func synopsis(_ a: Anime, loading: Bool) -> some View {
         if loading { SkeletonLines(widths: [420, 440, 400, 430, 260], height: 13).transition(.identity) }
-        else if !a.synopsis.isEmpty { Synopsis(store: store, id: anime.id, text: a.synopsis).transition(.opacity) }
+        else if !a.synopsis.isEmpty { Synopsis(store: store, id: anime.id, text: a.synopsis).frame(maxWidth: 560, alignment: .leading).transition(.opacity) } // ~75 characters a line, book-like
     }
 
     func seasons(_ a: Anime) -> String? {
