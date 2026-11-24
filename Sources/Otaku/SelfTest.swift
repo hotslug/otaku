@@ -18,6 +18,24 @@ import Foundation
                 let h = try await AniList.home()
                 check(h.rows.count == 10 && h.rows.allSatisfy { $0.items.count == 20 }, "anilist home: all 10 rows full")
                 for row in h.rows { print("AniList \(row.title):", row.items.prefix(3).map(\.title)) }
+                step = "AniList.search(season)"
+                let w = try await AniList.search("", Filters(year: 2023, season: "FALL"))
+                check(w.contains { $0.title.hasPrefix("Frieren") }, "season: Fall 2023 has Frieren")
+                step = "AniList.recommended()"
+                let fy = try await AniList.recommended(for: [Anime(id: "anilist:154587", title: "Frieren", synopsis: "", genres: [], links: [], titles: [])])
+                check(fy.count == 1 && fy[0].title == "Because you liked Frieren" && fy[0].items.count >= 5, "because you liked: rows")
+                step = "Import.mal()" // a tiny gzipped export: Frieren (watching), FMA:B (completed), Naruto (dropped, skipped)
+                let xml = FileManager.default.temporaryDirectory.appendingPathComponent("otaku-mal-test.xml")
+                try Data("<myanimelist><anime><series_animedb_id>52991</series_animedb_id><my_status>Watching</my_status></anime><anime><series_animedb_id>5114</series_animedb_id><my_status>Completed</my_status></anime><anime><series_animedb_id>20</series_animedb_id><my_status>Dropped</my_status></anime></myanimelist>".utf8).write(to: xml)
+                _ = try? FileManager.default.removeItem(atPath: xml.path + ".gz")
+                let gz = Process(); gz.executableURL = URL(fileURLWithPath: "/usr/bin/gzip"); gz.arguments = [xml.path]; try gz.run(); gz.waitUntilExit()
+                let mal = try await Import.mal(file: URL(fileURLWithPath: xml.path + ".gz"))
+                check(mal.items.count == 2 && mal.missing == 0 && mal.items.contains { $0.anime.title.hasPrefix("Frieren") && $0.status == .watching }
+                      && mal.items.contains { $0.anime.title.hasPrefix("Fullmetal") && $0.status == .finished }, "import: MAL export mapped to AniList: \(mal.items.map { "\($0.anime.title)=\($0.status?.rawValue ?? "-")" })")
+                if let u = ProcessInfo.processInfo.environment["OTAKU_IMPORT_USER"] { // try a real public AniList list without touching My list
+                    let items = try await Import.anilist(user: u)
+                    print("AniList import of \(u): \(items.count) shows, \(items.filter(\.favourite).count) favourites,", Dictionary(grouping: items) { $0.status?.rawValue ?? "fav only" }.mapValues(\.count))
+                }
                 step = "Kitsu.home()"
                 let k = try await Kitsu.home()
                 check(k.rows.count == 2 && k.rows.allSatisfy { !$0.items.isEmpty }, "kitsu home")
@@ -78,6 +96,10 @@ import Foundation
     }
 
     static func run() -> Int32 {
+        check(Import.tag("my_status", in: "<anime><series_animedb_id>21</series_animedb_id><my_status>Plan to Watch</my_status></anime>") == "Plan to Watch"
+              && Import.status(mal: "Plan to Watch") == .planning && Import.status(mal: "Dropped") == nil && Import.status(anilist: "COMPLETED") == .finished, "import: MAL/AniList statuses")
+        check(Filters.shift("FALL 2026", by: 1) == "WINTER 2027" && Filters.shift("WINTER 2027", by: -1) == "FALL 2026", "season steps wrap the year")
+        check(Filters.recentSeasons(now: Date(timeIntervalSince1970: 1_795_000_000)).prefix(2) == ["WINTER 2027", "FALL 2026"], "season list starts with next season")
         check(plain("A<br>\nB <i>c</i> &quot;d&quot; &amp; e") == "A\n\nB c \"d\" & e", "html stripped: \(plain("A<br>\nB <i>c</i> &quot;d&quot; &amp; e"))")
 
         // S1(TV) -> movie -> S2(TV) -> S3(TV, 3 hops away: the chain may go on)

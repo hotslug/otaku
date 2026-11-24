@@ -91,6 +91,7 @@ struct Filters: Codable, Equatable {
     var year: Int?
     var format: String?
     var status: String?
+    var season: String? // WINTER/SPRING/SUMMER/FALL, always with `year`
     var sort = "POPULARITY_DESC"
 
     static let genres = ["Action", "Adventure", "Comedy", "Drama", "Ecchi", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery",
@@ -99,8 +100,23 @@ struct Filters: Codable, Equatable {
     static let statuses = [("RELEASING", "Airing now"), ("FINISHED", "Finished"), ("NOT_YET_RELEASED", "Coming soon")]
     static let sorts = [("POPULARITY_DESC", "Most popular"), ("SCORE_DESC", "Best rated"), ("TRENDING_DESC", "Trending"), ("START_DATE_DESC", "Newest")]
 
-    var active: Bool { genre != nil || year != nil || format != nil || status != nil || sort != Filters().sort }
-    var key: String { [genre ?? "", year.map(String.init) ?? "", format ?? "", status ?? "", sort].joined(separator: "|") }
+    var active: Bool { genre != nil || year != nil || format != nil || status != nil || season != nil || sort != Filters().sort }
+    var key: String { [genre ?? "", year.map(String.init) ?? "", format ?? "", status ?? "", season ?? "", sort].joined(separator: "|") }
+
+    // Seasons as "WINTER 2027", for the season picker and its ‹ › steps.
+    static let seasonNames = ["WINTER", "SPRING", "SUMMER", "FALL"]
+    var seasonTag: String? { season.flatMap { s in year.map { "\(s) \($0)" } } }
+    static func label(_ tag: String) -> String { tag.capitalized }
+    static func icon(_ season: String?) -> String { ["WINTER": "snowflake", "SPRING": "camera.macro", "SUMMER": "sun.max", "FALL": "leaf"][season ?? ""] ?? "leaf" }
+    static func shift(_ tag: String, by n: Int) -> String {
+        let p = tag.split(separator: " "), i = (Int(p[1]) ?? 2000) * 4 + (seasonNames.firstIndex(of: String(p[0])) ?? 0) + n
+        return "\(seasonNames[i % 4]) \(i / 4)"
+    }
+    // Next season, this one, then the last three years.
+    static func recentSeasons(now: Date = Date()) -> [String] {
+        let (s, y) = AniList.season(now)
+        return (-12...1).reversed().map { shift("\(s) \(y)", by: $0) }
+    }
 }
 
 struct Airing: Codable, Hashable, Identifiable {
@@ -223,8 +239,21 @@ enum AniList {
         return Home(rows: rows.enumerated().map { Row(title: $0.element.0, items: d.d("r\($0.offset)")?.a("media").map(parse) ?? []) }.filter { !$0.items.isEmpty })
     }
 
+    // "Because you liked…": AniList's community recommendations for a few shows, in one request.
+    static func recommended(for shows: [Anime]) async throws -> [Row] {
+        let ids = shows.compactMap { Int($0.id.dropFirst("anilist:".count)) }
+        guard !ids.isEmpty else { return [] }
+        let q = ids.enumerated().map { "r\($0.offset): Media(id:\($0.element)){recommendations(sort:RATING_DESC,perPage:20){nodes{mediaRecommendation{type isAdult \(cardFields)}}}}" }
+        let d = try await query("{\(q.joined(separator: " "))}")
+        return shows.indices.map { i in
+            Row(title: "Because you liked \(shows[i].title)",
+                items: (d.d("r\(i)")?.d("recommendations")?.a("nodes") ?? []).compactMap { $0.d("mediaRecommendation") }
+                    .filter { $0.s("type") == "ANIME" && $0["isAdult"] as? Bool != true }.map(parse))
+        }
+    }
+
     // Only filters that are set go into the query (AniList rejects some of them as null).
-    static func search(_ q: String, _ f: Filters = Filters()) async throws -> [Anime] {
+    static func search(_ q: String, _ f: Filters = Filters(), page: Int = 1, minScore: Int? = nil) async throws -> [Anime] {
         var params = ["$sort:[MediaSort]"], args = ["sort:$sort"]
         // Matches ordered by the chosen sort (popular first by default): AniList's own "best match" can rank obscure shows
         // first, e.g. "demon slayer" -> Onigiri, whose Japanese title means demon slayer.
@@ -235,11 +264,17 @@ enum AniList {
         }
         add("q", "String", "search", q.isEmpty ? nil : q)
         add("genre", "String", "genre", f.genre)
+        add("min", "Int", "averageScore_greater", minScore)
         add("format", "MediaFormat", "format", f.format)
         add("status", "MediaStatus", "status", f.status)
-        add("from", "FuzzyDateInt", "startDate_greater", f.year.map { $0 * 10000 })
-        add("to", "FuzzyDateInt", "startDate_lesser", f.year.map { ($0 + 1) * 10000 })
-        let d = try await query("query(\(params.joined(separator: ","))){Page(perPage:40){media(type:ANIME,isAdult:false,\(args.joined(separator: ","))){\(cardFields)}}}", vars)
+        if let season = f.season { // a season is AniList's own grouping (a show starting late December can be Winter)
+            add("season", "MediaSeason", "season", season)
+            add("seasonYear", "Int", "seasonYear", f.year)
+        } else {
+            add("from", "FuzzyDateInt", "startDate_greater", f.year.map { $0 * 10000 })
+            add("to", "FuzzyDateInt", "startDate_lesser", f.year.map { ($0 + 1) * 10000 })
+        }
+        let d = try await query("query(\(params.joined(separator: ","))){Page(page:\(page),perPage:40){media(type:ANIME,isAdult:false,\(args.joined(separator: ","))){\(cardFields)}}}", vars)
         return d.d("Page")?.a("media").map(parse) ?? []
     }
 
@@ -418,6 +453,7 @@ enum Kitsu {
         var p = ["page[limit]=20"]
         if !q.isEmpty { p.append("filter[text]=" + Net.enc(q)) } else { p.append(f.sort == "SCORE_DESC" ? "sort=-averageRating" : f.sort == "START_DATE_DESC" ? "sort=-startDate" : "sort=-userCount") }
         if let y = f.year { p.append("filter[seasonYear]=\(y)") }
+        if let s = f.season { p.append("filter[season]=" + s.lowercased()) }
         if let s = ["RELEASING": "current", "FINISHED": "finished", "NOT_YET_RELEASED": "upcoming"][f.status ?? ""] { p.append("filter[status]=" + s) }
         if let t = ["TV": "TV", "MOVIE": "movie", "OVA": "OVA", "ONA": "ONA", "SPECIAL": "special"][f.format ?? ""] { p.append("filter[subtype]=" + t) }
         return list(try await get("anime?" + p.joined(separator: "&").replacingOccurrences(of: "[", with: "%5B").replacingOccurrences(of: "]", with: "%5D")))

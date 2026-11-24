@@ -22,7 +22,12 @@ enum Tab: String, CaseIterable {
     @Published var rowX: [String: CGFloat] = [:] // how far each row is scrolled
     @Published var rowEnd: [String: CGFloat] = [:] // furthest it can scroll
     @Published var hoverRow: String?
+    var rowWidth: [String: CGFloat] = [:] // visible width of each row, for paging to a highlighted card
+    var gridCols = 1 // cards per line in the results grid, for ↑ ↓
+    @Published var reveal: String? // row or card the arrow keys moved to: scrolled into view
     @Published var hoverCard: String?
+    @Published var confirmRemove: Anime? // waiting for "Remove from My list?" to be answered
+    @Published var statsWidth: CGFloat = 200 // the stats column on a show's page; the trailer matches poster + stats
     @Published var detailWidth: CGFloat = 1000 // width beside the poster on a show's page; narrow puts the synopsis under the stats
     @Published var expandedLinks: Set<String> = [] // link lists showing "+N more" expanded
     @Published var schedule: [Airing]?
@@ -31,6 +36,7 @@ enum Tab: String, CaseIterable {
     @Published var list: [String: Entry] = Store.loadList() { didSet { saveList() } }
 
     @Published var home: Home?
+    @Published var forYou: [Row] = [] // "Because you liked…" rows, from Favourites
     @Published var query = ""
     @Published var filters = Filters() { didSet { if filters != oldValue { Task { await search() } } } }
     @Published var results: [Anime]?
@@ -78,6 +84,27 @@ enum Tab: String, CaseIterable {
         if home == nil { home = await fetch("home-rows", [{ try await AniList.home() }, { try await Kitsu.home() }]) }
     }
 
+    // Start page rows: Trending, then the personal ones, then the rest.
+    var discoverRows: [Row] { home.map { Array($0.rows.prefix(1) + forYou + $0.rows.dropFirst()) } ?? [] }
+
+    var resultsTitle: String { resultsFor.isEmpty ? (filters.seasonTag.map(Filters.label) ?? "Filtered") : "Results for “\(resultsFor)”" }
+
+    // My list as rows: Favourites, then each status, A-Z.
+    var myListRows: [Row] {
+        let entries = list.values.sorted { $0.anime.title.localizedCaseInsensitiveCompare($1.anime.title) == .orderedAscending }
+        return ([Row(title: "★ Favourites", items: entries.filter(\.favourite).map(\.anime))]
+            + Status.allCases.map { s in Row(title: s.rawValue, items: entries.filter { $0.status == s }.map(\.anime)) }).filter { !$0.items.isEmpty }
+    }
+
+    // Two favourites (picked at random, so the rows vary) -> their recommendations, minus shows already in My list.
+    func loadForYou() async {
+        let picks = Array(list.values.filter { $0.favourite && $0.anime.id.hasPrefix("anilist:") }.map(\.anime).shuffled().prefix(2))
+        let rows = picks.isEmpty ? [] : await fetch("for-you:" + picks.map(\.id).sorted().joined(separator: ","),
+                                                    [{ try await AniList.recommended(for: picks) }], main: false) ?? []
+        forYou = rows.map { Row(title: $0.title, items: $0.items.filter { list[$0.id] == nil }) }.filter { $0.items.count >= 3 }
+        if ProcessInfo.processInfo.environment["OTAKU_LOG"] != nil { FileHandle.standardError.write(Data("for you: \(forYou.map { "\($0.title) (\($0.items.count))" })\n".utf8)) }
+    }
+
     // Runs for a search term, filters, or both.
     func search() async {
         let q = query.trimmingCharacters(in: .whitespaces), f = filters
@@ -89,6 +116,24 @@ enum Tab: String, CaseIterable {
         searching = false
         results = r
         resultsFor = q
+    }
+
+    // "Surprise me": a random well-rated show that fits the current filters and isn't on My list yet, opened straight away.
+    @Published var surprising = false
+
+    func surprise() async {
+        surprising = true
+        defer { surprising = false }
+        var f = filters
+        f.sort = "POPULARITY_DESC" // known shows, so the surprise is a good one
+        var pool: [Anime] = []
+        for page in [Int.random(in: 1...5), 1] where pool.isEmpty { // a random page of the top 200; page 1 if the filters are narrow
+            pool = ((try? await AniList.search("", f, page: page, minScore: 70)) ?? []).filter { list[$0.id] == nil }
+        }
+        if pool.isEmpty { pool = ((try? await Kitsu.search("", f)) ?? []).filter { list[$0.id] == nil } }
+        guard let pick = pool.randomElement() else { error = "No surprise found for these filters."; return }
+        tab = .discover
+        path = [pick]
     }
 
     // Search as you type: waits for a short pause, so a word costs one request, not one per letter.
@@ -171,6 +216,50 @@ enum Tab: String, CaseIterable {
         var e = list[a.id] ?? Entry(anime: a)
         e.favourite.toggle()
         put(a.id, e)
+    }
+
+    // Import: shows already on My list keep their status; favourites only get added.
+    @Published var importing = false
+    @Published var importNote: String?
+    @Published var anilistUser = UserDefaults.standard.string(forKey: "anilistUser") ?? "" { didSet { UserDefaults.standard.set(anilistUser, forKey: "anilistUser") } }
+
+    func merge(_ items: [Import.Item]) -> Int {
+        var l = list, added = 0
+        for i in items {
+            var e = l[i.anime.id] ?? Entry(anime: i.anime)
+            if e.status == nil && e.favourite == false { added += 1 }
+            if e.status == nil { e.status = i.status }
+            e.favourite = e.favourite || i.favourite
+            l[i.anime.id] = e
+        }
+        list = l // one save
+        return added
+    }
+
+    func runImport(_ source: String, _ work: () async throws -> ([Import.Item], Int)) async {
+        importing = true; importNote = nil
+        defer { importing = false }
+        do {
+            let (items, missing) = try await work()
+            let added = merge(items)
+            importNote = items.isEmpty ? "Nothing to import from \(source)." :
+                "Imported \(items.count) shows from \(source): \(added) new, \(items.count - added) already on My list." +
+                (missing > 0 ? " \(missing) couldn't be found on AniList." : "")
+            if items.contains(where: { $0.status == .watching || $0.status == .planning }) { Alerts.ask() }
+        } catch {
+            importNote = "Couldn't import from \(source). " + (source == "AniList" ? "Check the user name, and that the list is public." : "Check it's the file MyAnimeList exported.")
+        }
+    }
+
+    func importAniList() async {
+        let u = anilistUser.trimmingCharacters(in: .whitespaces)
+        guard !u.isEmpty else { return }
+        await runImport("AniList") { (try await Import.anilist(user: u), 0) }
+    }
+
+    func importMAL() async {
+        guard let f = Import.pickMALFile() else { return }
+        await runImport("MyAnimeList") { try await Import.mal(file: f) }
     }
 
     func put(_ id: String, _ e: Entry) { list[id] = e.status == nil && !e.favourite ? nil : e }

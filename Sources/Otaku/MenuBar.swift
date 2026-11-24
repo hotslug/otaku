@@ -34,6 +34,28 @@ extension MenuBarLabel {
     }()
 }
 
+extension MenuBarLabel {
+    // A torii gate, the "home" button when you've followed related shows a long way.
+    static let torii: NSImage = {
+        let img = NSImage(size: NSSize(width: 18, height: 16), flipped: true) { _ in
+            NSColor.black.setFill()
+            let top = NSBezierPath() // the kasagi: a top beam with upturned ends
+            top.move(to: NSPoint(x: 0.5, y: 1))
+            top.curve(to: NSPoint(x: 17.5, y: 1), controlPoint1: NSPoint(x: 6, y: 3.2), controlPoint2: NSPoint(x: 12, y: 3.2))
+            top.line(to: NSPoint(x: 16.5, y: 4.2))
+            top.curve(to: NSPoint(x: 1.5, y: 4.2), controlPoint1: NSPoint(x: 12, y: 5.6), controlPoint2: NSPoint(x: 6, y: 5.6))
+            top.close(); top.fill()
+            NSRect(x: 2.5, y: 7, width: 13, height: 1.8).fill() // the nuki
+            NSRect(x: 4, y: 4, width: 1.9, height: 12).fill()   // pillars
+            NSRect(x: 12.1, y: 4, width: 1.9, height: 12).fill()
+            NSRect(x: 8.2, y: 4.5, width: 1.6, height: 2.5).fill() // the little strut between beams
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }()
+}
+
 struct MenuBarPanel: View {
     @ObservedObject var store: Store
     @Environment(\.openWindow) private var openWindow

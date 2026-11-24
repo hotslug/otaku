@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        Keys.install()
         Store.shared.appearance.apply()
 
         // Keeps running with the window closed (click the Dock icon to reopen) so alerts still arrive.
@@ -94,7 +95,23 @@ struct ContentView: View {
             .toolbarBackground(Theme.dusk, for: .windowToolbar) // match the night sky below
             .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
             .navigationTitle("Otaku")
-            .navigationDestination(for: Anime.self) { DetailView(store: store, anime: $0) }
+            .navigationDestination(for: Anime.self) { a in
+                DetailView(store: store, anime: a)
+                    .navigationBarBackButtonHidden() // our own back, so the torii can sit before it
+                    .toolbar {
+                        ToolbarItem(placement: .navigation) {
+                            HStack(spacing: 2) {
+                                if store.path.count > 1 { // deep in related shows: one click back to where we started
+                                    Button { store.path = [] } label: { Image(nsImage: MenuBarLabel.torii) }
+                                        .help("Back to \(store.tab.rawValue)")
+                                }
+                                Button { store.path.removeLast() } label: { Image(systemName: "chevron.left") }
+                                    .help("Back")
+                                    .keyboardShortcut("[", modifiers: .command)
+                            }
+                        }
+                    }
+            }
             .searchable(text: $store.query, placement: .toolbar, prompt: "Search anime")
             .onSubmit(of: .search) { store.typing?.cancel(); store.path = []; store.tab = .discover; Task { await store.search() } }
             .toolbar {
@@ -112,11 +129,24 @@ struct ContentView: View {
             }
         }
         .onChange(of: store.query) { store.typed() }
+        .alert(store.confirmRemove.map { "Remove “\($0.title)” from My list?" } ?? "",
+               isPresented: Binding(get: { store.confirmRemove != nil }, set: { if !$0 { store.confirmRemove = nil } }),
+               presenting: store.confirmRemove) { a in
+            Button("Remove", role: .destructive) { store.setStatus(a, nil); store.confirmRemove = nil }
+            Button("Cancel", role: .cancel) { store.confirmRemove = nil }
+        } message: { a in
+            let e = store.list[a.id]
+            Text([e?.status.map { "It's in \($0.rawValue)." },
+                  e?.status != .finished ? "You'll stop getting new-episode alerts for it." : nil,
+                  e?.favourite == true ? "It stays in your Favourites." : nil].compactMap { $0 }.joined(separator: " "))
+        }
         .task {
             await store.loadHome()
             // Layout checks: OTAKU_QUERY=frieren (+ OTAKU_OPEN=1 to open the first result), OTAKU_TAB=Schedule, OTAKU_HOVER=<row title>, OTAKU_SETTINGS=1.
             let env = ProcessInfo.processInfo.environment
             if let t = env["OTAKU_TAB"].flatMap(Tab.init(rawValue:)) { store.tab = t }
+            if let s = env["OTAKU_SEASON"] { store.filters.season = "WINTER"; store.filters.year = Int(s) } // e.g. OTAKU_SEASON=2027
+            if env["OTAKU_SURPRISE"] != nil { try? await Task.sleep(for: .seconds(4)); await store.surprise() } // after any filters have loaded, like a click
             if env["OTAKU_SETTINGS"] != nil { openSettings() }
             if let out = env["OTAKU_MENU_SNAPSHOT"] { // layout check: draw the menu bar panel to a PNG
                 await store.loadSchedule()
@@ -141,7 +171,7 @@ struct ContentView: View {
                 store.query = q
                 await store.search()
                 if env["OTAKU_OPEN"] != nil, let first = store.results?.first {
-                    store.path = [first]
+                    store.path = env["OTAKU_OPEN"] == "2" ? Array(store.results!.prefix(2)) : [first] // 2 = drilled down, shows the torii
                     if env["OTAKU_PLAY"] != nil { // also open its trailer once the page has loaded
                         try? await Task.sleep(for: .seconds(4))
                         store.playing = store.details[first.id]?.trailer
@@ -173,6 +203,7 @@ struct DiscoverView: View {
     @ObservedObject var store: Store
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 Banners(store: store)
@@ -182,9 +213,9 @@ struct DiscoverView: View {
                 } else if let r = store.results {
                     let what = store.resultsFor.isEmpty ? "these filters" : "“\(store.resultsFor)”"
                     if r.isEmpty { Text("No anime found for \(what).").foregroundStyle(.secondary) }
-                    else { Shelf(store: store, title: store.resultsFor.isEmpty ? "Filtered" : "Results for “\(store.resultsFor)”", items: r) }
-                } else if let h = store.home {
-                    ForEach(h.rows) { Strip(store: store, title: $0.title, items: $0.items) }
+                    else { Shelf(store: store, title: store.resultsTitle, items: r) }
+                } else if store.home != nil {
+                    ForEach(store.discoverRows) { Strip(store: store, title: $0.title, items: $0.items) }
                 } else if store.error == nil {
                     ForEach(0..<3, id: \.self) { _ in SkeletonStrip().transition(.identity) }
                 }
@@ -193,6 +224,9 @@ struct DiscoverView: View {
             .animation(.easeOut(duration: 0.3), value: store.searching)
             .animation(.easeOut(duration: 0.4), value: store.home == nil)
         }
+        .onChange(of: store.reveal) { if let r = store.reveal { withAnimation { proxy.scrollTo(r) } } }
+        }
+        .task(id: store.list.values.filter(\.favourite).map(\.anime.id).sorted()) { await store.loadForYou() }
     }
 }
 
@@ -209,13 +243,16 @@ struct FilterBar: View {
                     ForEach(Filters.genres, id: \.self) { Text($0).tag(String?.some($0)) }
                 }
             }
-            FilterChip(icon: "calendar", label: f.year.map(String.init) ?? "Year", active: f.year != nil, tip: "Year it started") {
-                Picker("Year", selection: $store.filters.year) {
-                    Text("Any year").tag(Int?.none)
-                    Divider()
-                    ForEach((1960...Calendar.current.component(.year, from: Date()) + 1).reversed(), id: \.self) { Text(String($0)).tag(Int?.some($0)) }
+            if f.season == nil { // a season already says the year
+                FilterChip(icon: "calendar", label: f.year.map(String.init) ?? "Year", active: f.year != nil, tip: "Year it started") {
+                    Picker("Year", selection: $store.filters.year) {
+                        Text("Any year").tag(Int?.none)
+                        Divider()
+                        ForEach((1960...Calendar.current.component(.year, from: Date()) + 1).reversed(), id: \.self) { Text(String($0)).tag(Int?.some($0)) }
+                    }
                 }
             }
+            SeasonPicker(store: store)
             FilterChip(icon: "tv", label: Filters.formats.first { $0.0 == f.format }?.1 ?? "Format", active: f.format != nil, tip: "TV, movie, OVA…") {
                 Picker("Format", selection: $store.filters.format) {
                     Text("Any format").tag(String?.none)
@@ -244,8 +281,51 @@ struct FilterBar: View {
                 .help("Clear all filters")
             }
             Spacer()
+            Button { Task { await store.surprise() } } label: {
+                Label("Surprise me", systemImage: store.surprising ? "hourglass" : "dice").chip(active: false)
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .disabled(store.surprising)
+            .help(f.active ? "Open a random, well-rated show that fits these filters" : "Open a random, well-rated show")
         }
         .animation(.easeOut(duration: 0.15), value: f)
+    }
+}
+
+// Everything from one season, e.g. Winter 2027, with ‹ › to step to the one before or after.
+struct SeasonPicker: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
+        let tag = store.filters.seasonTag
+        HStack(spacing: 4) {
+            if let tag { step(tag, -1, "chevron.left", "Season before") }
+            FilterChip(icon: Filters.icon(store.filters.season), label: tag.map(Filters.label) ?? "Season", active: tag != nil,
+                       tip: "Everything from one season", sizedFor: ["Season", "Summer 2026"]) {
+                Picker("Season", selection: Binding(get: { tag }, set: set)) {
+                    Text("Any season").tag(String?.none)
+                    Divider()
+                    ForEach(Filters.recentSeasons(), id: \.self) { Text(Filters.label($0)).tag(String?.some($0)) }
+                }
+            }
+            if let tag { step(tag, 1, "chevron.right", "Season after") }
+        }
+    }
+
+    func set(_ tag: String?) {
+        let p = tag?.split(separator: " ")
+        store.filters.season = p.map { String($0[0]) }
+        store.filters.year = p.flatMap { Int($0[1]) }
+    }
+
+    func step(_ tag: String, _ n: Int, _ icon: String, _ tip: String) -> some View {
+        Button { set(Filters.shift(tag, by: n)) } label: {
+            Image(systemName: icon).font(.caption.weight(.bold)).frame(width: 12).chip(active: false)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(tip)
     }
 }
 
@@ -298,10 +378,10 @@ struct MyListView: View {
     @ObservedObject var store: Store
 
     var body: some View {
-        let entries = store.list.values.sorted { $0.anime.title.localizedCaseInsensitiveCompare($1.anime.title) == .orderedAscending }
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                if entries.isEmpty {
+                if store.list.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "list.star").font(.system(size: 40)).foregroundStyle(.secondary)
                         Text("Your list is empty").font(.title2.bold())
@@ -310,14 +390,11 @@ struct MyListView: View {
                     }
                     .frame(maxWidth: .infinity).padding(.top, 80)
                 }
-                let favs = entries.filter(\.favourite)
-                if !favs.isEmpty { Strip(store: store, title: "★ Favourites", items: favs.map(\.anime), notes: notes) }
-                ForEach(Status.allCases, id: \.self) { s in
-                    let items = entries.filter { $0.status == s }
-                    if !items.isEmpty { Strip(store: store, title: s.rawValue, items: items.map(\.anime), notes: notes) }
-                }
+                ForEach(store.myListRows) { Strip(store: store, title: $0.title, items: $0.items, notes: notes) }
             }
             .padding(24)
+        }
+        .onChange(of: store.reveal) { if let r = store.reveal { withAnimation { proxy.scrollTo(r) } } }
         }
     }
 
@@ -406,6 +483,7 @@ struct Strip: View {
                 ForEach(items) { a in CardLink(store: store, a: a, note: notes(a), row: key) }
             }
         }
+        .id(key) // the arrow keys scroll the page to this row
     }
 }
 
@@ -432,9 +510,10 @@ struct PagedRow<Content: View>: View {
             .scrollIndicators(.never)
             // Scrolls only this row by an exact distance (scrolling *to a card* would also move the page).
             .scrollPosition(Binding(get: { store.rowScroll[key] ?? ScrollPosition() }, set: { store.rowScroll[key] = $0 }))
-            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.x, $0.contentSize.width - $0.containerSize.width] } action: { _, v in
+            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.x, $0.contentSize.width - $0.containerSize.width, $0.containerSize.width] } action: { _, v in
                 store.rowX[key] = v[0]
                 store.rowEnd[key] = v[1]
+                store.rowWidth[key] = v[2]
             }
             .scrollTargetBehavior(.viewAligned)
             .overlay(alignment: .topLeading) {
@@ -515,9 +594,10 @@ struct Shelf: View {
             SectionTitle(title)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 160), spacing: 18, alignment: .top)], alignment: .leading, spacing: 22) {
                 ForEach(items) { a in
-                    CardLink(store: store, a: a, note: notes(a), row: title)
+                    CardLink(store: store, a: a, note: notes(a), row: title).id(title + "|" + a.id)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.gridCols = max(1, Int(($0 + 18) / (140 + 18))) }
         }
     }
 }
@@ -536,7 +616,7 @@ struct StatusItems: View {
         }
         if e?.status != nil {
             Divider()
-            Button("Remove from My list") { store.setStatus(a, nil) }
+            Button("Remove from My list…") { store.confirmRemove = a } // asks first
         }
     }
 }
@@ -848,6 +928,7 @@ struct DetailView: View {
                         if store.detailWidth >= 760 {
                             HStack(alignment: .top, spacing: 36) {
                                 stats(a, loading: loading).fixedSize()
+                                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.statsWidth = $0 }
                                 synopsis(a, loading: loading).frame(maxWidth: 680, alignment: .leading)
                             }
                         } else {
@@ -862,22 +943,17 @@ struct DetailView: View {
                 if loading {
                     SkeletonStrip().transition(.identity)
                 } else {
-                if let t = a.trailer {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionTitle("Trailer")
-                        Button { store.playing = t } label: {
-                            FadeImage(url: t.thumbnail)
-                                .frame(width: 360, height: 202).clipped()
-                                .overlay(Color.black.opacity(0.25))
-                                .overlay(Image(systemName: "play.circle.fill").font(.system(size: 58)).foregroundStyle(.white).shadow(radius: 6))
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Play the trailer")
+                // Trailer and where to watch side by side; stacked when the window is narrow.
+                if a.trailer != nil, store.detailWidth >= 560 {
+                    HStack(alignment: .top, spacing: 36) {
+                        // as wide as poster + stats, so "Where to watch" lines up under the synopsis
+                        trailer(a, width: store.detailWidth >= 760 ? max(360, 200 + 22 + store.statsWidth) : 360)
+                        whereToWatch(a).frame(maxWidth: .infinity, alignment: .leading)
                     }
+                } else {
+                    trailer(a)
+                    whereToWatch(a)
                 }
-                whereToWatch(a)
                 if let cast = a.cast, !cast.isEmpty {
                     let hasEnglish = cast.contains { $0.english != nil }
                     let english = hasEnglish && store.englishCast
@@ -985,6 +1061,24 @@ struct DetailView: View {
 
     @ViewBuilder func row(_ k: String, _ v: String?) -> some View {
         if let v { GridRow { Text(k).foregroundStyle(.secondary); Text(v).textSelection(.enabled) } }
+    }
+
+    @ViewBuilder func trailer(_ a: Anime, width: CGFloat = 360) -> some View {
+        if let t = a.trailer {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionTitle("Trailer")
+                Button { store.playing = t } label: {
+                    FadeImage(url: t.thumbnail)
+                        .frame(width: width, height: (width * 9 / 16).rounded()).clipped()
+                        .overlay(Color.black.opacity(0.25))
+                        .overlay(Image(systemName: "play.circle.fill").font(.system(size: 58)).foregroundStyle(.white).shadow(radius: 6))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Play the trailer")
+            }
+        }
     }
 
     @ViewBuilder func whereToWatch(_ a: Anime) -> some View {
@@ -1211,6 +1305,37 @@ struct SettingsView: View {
                 SettingsSwitch(title: "Open Otaku at login", isOn: Binding(get: { Alerts.openAtLogin }, set: { Alerts.openAtLogin = $0; store.objectWillChange.send() }))
                 Text("Covers shows on My list that aren't Finished. Alerts only arrive while Otaku is running; closing its window keeps it running. The menu bar shows what from My list airs today.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+
+            SettingsCard(title: "Import my list") {
+                HStack(spacing: 10) {
+                    TextField("AniList user name", text: $store.anilistUser)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.edge))
+                        .onSubmit { Task { await store.importAniList() } }
+                    Button { Task { await store.importAniList() } } label: { Label("Import", systemImage: "square.and.arrow.down") }
+                        .buttonStyle(ChipStyle())
+                        .focusable(false)
+                        .disabled(store.importing || store.anilistUser.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .help("Add your public AniList list and favourites to My list")
+                }
+                HStack(spacing: 8) {
+                    Button { Task { await store.importMAL() } } label: { Label("Import MyAnimeList export…", systemImage: "doc.badge.arrow.up") }
+                        .buttonStyle(ChipStyle())
+                        .focusable(false)
+                        .disabled(store.importing)
+                        .help("Choose the .xml or .xml.gz file MyAnimeList gives you")
+                    Link(destination: URL(string: "https://myanimelist.net/panel.php?go=export")!) { Label("Export from MyAnimeList", systemImage: "arrow.up.right") }
+                        .buttonStyle(ChipStyle())
+                        .focusable(false)
+                        .help("Opens MyAnimeList's export page in your browser")
+                    if store.importing { ProgressView().controlSize(.small) }
+                }
+                Text(store.importNote ?? "Adds shows to My list with their status (watching, planned, finished); dropped shows are skipped. Shows already on My list keep their status.")
+                    .font(.caption).foregroundStyle(store.importNote == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.gold))
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             SettingsCard(title: "Where to watch") {
