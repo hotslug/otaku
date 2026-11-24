@@ -8,6 +8,16 @@ import SwiftUI
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             MainActor.assumeIsolated { handle(e) } ? nil : e
         }
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { n in
+            MainActor.assumeIsolated { styleSearch(n.object as? NSWindow) }
+        }
+    }
+
+    // A brighter placeholder in the toolbar search box. (Its bezel can't be restyled: a layer fill never shows.)
+    static func styleSearch(_ w: NSWindow?) {
+        guard let f = searchField(w), let cell = f.cell as? NSSearchFieldCell else { return }
+        cell.placeholderAttributedString = NSAttributedString(string: cell.placeholderString ?? "",
+            attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: f.font ?? .systemFont(ofSize: 13)])
     }
 
     static func searchField(_ w: NSWindow?) -> NSSearchField? {

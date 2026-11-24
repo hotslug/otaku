@@ -143,6 +143,7 @@ struct ContentView: View {
         }
         .task {
             await store.loadHome()
+            NSApp.windows.forEach(Keys.styleSearch) // also when the window never becomes key (launched from a script); the toolbar is up by now
             // Layout checks: OTAKU_QUERY=frieren (+ OTAKU_OPEN=1 to open the first result), OTAKU_TAB=Schedule, OTAKU_HOVER=<row title>, OTAKU_SETTINGS=1.
             let env = ProcessInfo.processInfo.environment
             if let t = env["OTAKU_TAB"].flatMap(Tab.init(rawValue:)) { store.tab = t }
@@ -354,7 +355,7 @@ struct FilterChip<Content: View>: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                ZStack {
+                ZStack(alignment: .leading) { // label hugs its icon; the spare width goes after it
                     ForEach(sizedFor, id: \.self) { Text($0).hidden() }
                     Text(label)
                 }
@@ -645,7 +646,7 @@ struct CardLink: View {
         NavigationLink(value: a) { Card(a: a, note: note) }
             .buttonStyle(.plain)
             .overlay(alignment: .topTrailing) {
-                VStack(spacing: 6) {
+                HStack(spacing: 6) {
                     if hover || e?.favourite == true {
                         Button { store.toggleFavourite(a) } label: {
                             CardIcon(symbol: e?.favourite == true ? "star.fill" : "star", tint: e?.favourite == true ? Theme.gold : .white)
@@ -699,7 +700,7 @@ struct Card: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Poster(url: a.poster, width: 140, height: 200)
-            Text(a.title).font(.headline).lineLimit(2)
+            Text(a.title).font(.headline).lineLimit(2, reservesSpace: true) // star lines stay level across a row
             HStack(spacing: 4) {
                 if let sc = a.score { Image(systemName: "star.fill").foregroundStyle(Theme.gold); Text("\(sc) ·") }
                 Text([a.year, a.format].compactMap { $0 }.joined(separator: " · "))
