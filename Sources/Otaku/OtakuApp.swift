@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillFinishLaunching(_ n: Notification) {
         let env = ProcessInfo.processInfo.environment
         if let out = env["OTAKU_ICON"] { exit(Icon.write(to: out) ? 0 : 1) }
+        if let dir = env["OTAKU_DMG_BG"] { exit(Icon.writeDMGBackground(to: dir) ? 0 : 1) } // release.sh: DMG window picture
         if let out = env["OTAKU_MENU_ICON"] { // preview of the menu bar icon, 8x size, white on dark and black on light
             let img = NSImage(size: NSSize(width: 320, height: 160), flipped: false) { _ in
                 NSColor(white: 0.15, alpha: 1).setFill(); NSRect(x: 0, y: 0, width: 160, height: 160).fill()
