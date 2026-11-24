@@ -4,14 +4,16 @@
 
 A Mac app for finding the world's most popular anime and where to watch them.
 
-- Start page: most popular and trending anime as poster cards
+- Start page: trending, popular and seasonal rows, plus "Because you liked…" rows from your Favourites
 - Search: results as cards
 - Click a card: banner, poster, dates, status, seasons, episodes, score, studio, genres, synopsis, trailer, characters and voice cast, streaming links, related shows and recommendations
-- Filters (genre, year, format, status, sort) and search as you type
-- My list (Watching, Plan to watch, Finished, Favourites) with new-episode alerts, and this week's airing schedule
+- Filters (genre, year, season with ‹ › steps, format, status, sort), search as you type, and Surprise me
+- Keyboard: ⌘F to search, arrow keys between cards, Return to open
+- My list (Watching, Plan to watch, Finished, Favourites) with new-episode alerts, a menu bar list of what airs today, and this week's schedule
+- Import your list from AniList or a MyAnimeList export
 - Light, Dark and Auto themes
 
-Data comes from [AniList](https://anilist.co), with [Kitsu](https://kitsu.io) as a fallback. The last good results are saved, so the app still works when both are down. Optionally, add a free [TMDB](https://www.themoviedb.org/settings/api) key in Settings to see what's streaming in your country (from your Mac's region) and where a show first aired. Availability data is from JustWatch via TMDB.
+Data comes from [AniList](https://anilist.co), with [Kitsu](https://kitsu.io) as a fallback. The last good results are saved, so the app still works when both are down. Optionally, add a free [Movie of the Night](https://www.movieofthenight.com/about/api) or [TMDB](https://www.themoviedb.org/settings/api) key in Settings to see what's streaming in your country (from your Mac's region) and where a show first aired. Availability data is from JustWatch via TMDB.
 
 ## Install
 
