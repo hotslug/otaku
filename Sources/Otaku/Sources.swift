@@ -232,7 +232,7 @@ enum AniList {
 
     // Shows for the carousel, with banner and synopsis, in the order asked.
     static func featured(ids: [Int]) async throws -> [Anime] {
-        let d = try await query("query($ids:[Int]){Page(perPage:10){media(id_in:$ids,type:ANIME){\(cardFields) \(heroFields)}}}", ["ids": ids])
+        let d = try await query("query($ids:[Int]){Page(perPage:50){media(id_in:$ids,type:ANIME){\(cardFields) \(heroFields)}}}", ["ids": ids])
         let found = d.d("Page")?.a("media").map(parse) ?? []
         return ids.compactMap { id in found.first { $0.id == "anilist:\(id)" } }
     }
@@ -293,7 +293,7 @@ enum AniList {
             add("from", "FuzzyDateInt", "startDate_greater", f.year.map { $0 * 10000 })
             add("to", "FuzzyDateInt", "startDate_lesser", f.year.map { ($0 + 1) * 10000 })
         }
-        let d = try await query("query(\(params.joined(separator: ","))){Page(page:\(page),perPage:40){media(type:ANIME,isAdult:false,\(args.joined(separator: ","))){\(cardFields)}}}", vars)
+        let d = try await query("query(\(params.joined(separator: ","))){Page(page:\(page),perPage:40){media(type:ANIME,isAdult:false,\(args.joined(separator: ","))){\(cardFields) \(heroFields)}}}", vars)
         return d.d("Page")?.a("media").map(parse) ?? []
     }
 

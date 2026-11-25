@@ -58,9 +58,10 @@ extension Store {
         guard path.isEmpty else { return [] }
         switch tab {
         case .discover:
-            if let r = results { return r.isEmpty ? [] : [NavRow(key: resultsTitle, items: r, grid: true)] }
+            if let r = results { return r.count < 2 ? [] : [NavRow(key: resultsTitle, items: Array(r.dropFirst()), grid: true)] } // the first is the picture
             return discoverRows.map { NavRow(key: $0.title, items: $0.items, grid: false) }
-        case .list: return myListRows.map { NavRow(key: $0.title, items: $0.items, grid: false) }
+        // ponytail: the wide Watching row isn't in arrow-key reach (its cards step differently); add it if that's missed.
+        case .list: return myListRows.filter { $0.title != Status.watching.rawValue }.map { NavRow(key: $0.title, items: $0.items, grid: false) }
         case .schedule: return []
         }
     }

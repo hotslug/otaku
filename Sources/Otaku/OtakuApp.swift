@@ -94,7 +94,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.sky.ignoresSafeArea())
             .toolbarBackground(Theme.dusk, for: .windowToolbar) // match the night sky below
-            .toolbarBackgroundVisibility(store.showsCarousel ? .hidden : .visible, for: .windowToolbar) // the carousel runs up under it
+            .toolbarBackgroundVisibility(store.heroOnTop ? .hidden : .visible, for: .windowToolbar) // a page's hero picture runs up under it
             .navigationTitle("Otaku")
             .navigationDestination(for: Anime.self) { a in
                 DetailView(store: store, anime: a)
@@ -214,7 +214,7 @@ struct DiscoverView: View {
     @ObservedObject var store: Store
 
     var body: some View {
-        let slides = store.showsCarousel ? store.slides : []
+        let slides = store.heroOnTop ? store.discoverSlides : []
         ScrollViewReader { proxy in
         ScrollView {
             if !slides.isEmpty { Carousel(store: store, slides: slides).transition(.opacity) }
@@ -226,7 +226,7 @@ struct DiscoverView: View {
                 } else if let r = store.results {
                     let what = store.resultsFor.isEmpty ? "these filters" : "“\(store.resultsFor)”"
                     if r.isEmpty { Text("No anime found for \(what).").foregroundStyle(.secondary) }
-                    else { Shelf(store: store, title: store.resultsTitle, items: r) }
+                    else if r.count > 1 { Shelf(store: store, title: store.resultsTitle, items: Array(r.dropFirst())) } // the first is the picture above
                 } else if store.home != nil {
                     ForEach(store.discoverRows) { Strip(store: store, title: $0.title, items: $0.items) }
                 } else if store.error == nil {
@@ -237,9 +237,7 @@ struct DiscoverView: View {
             .animation(.easeOut(duration: 0.3), value: store.searching)
             .animation(.easeOut(duration: 0.4), value: store.home == nil)
         }
-        // With the carousel, its picture runs up under the toolbar like a show's page.
-        .ignoresSafeArea(edges: slides.isEmpty ? [] : .top)
-        .background { if !slides.isEmpty { Theme.skyBottom.ignoresSafeArea() } } // one colour under the picture, so its fade has nothing to meet
+        .heroPage(!slides.isEmpty) // the picture runs up under the toolbar like a show's page
         .onChange(of: store.reveal) { if let r = store.reveal { withAnimation { proxy.scrollTo(r) } } }
         }
         .task(id: store.list.values.filter(\.favourite).map(\.anime.id).sorted()) { await store.loadForYou() }
@@ -395,8 +393,10 @@ struct MyListView: View {
     @ObservedObject var store: Store
 
     var body: some View {
+        let slides = store.heroOnTop ? store.listSlides : []
         ScrollViewReader { proxy in
         ScrollView {
+            if !slides.isEmpty { Carousel(store: store, slides: slides).transition(.opacity) }
             VStack(alignment: .leading, spacing: 28) {
                 if store.list.isEmpty {
                     VStack(spacing: 8) {
@@ -407,15 +407,22 @@ struct MyListView: View {
                     }
                     .frame(maxWidth: .infinity).padding(.top, 80)
                 }
-                ForEach(store.myListRows) { Strip(store: store, title: $0.title, items: $0.items, notes: notes) }
+                ForEach(store.myListRows) { row in
+                    if row.title == Status.watching.rawValue { WideRow(store: store, title: row.title, items: row.items.map(store.art), notes: notes) }
+                    else { Strip(store: store, title: row.title, items: row.items, notes: notes) }
+                }
             }
             .padding(24)
         }
+        .heroPage(!slides.isEmpty)
+        .animation(.easeOut(duration: 0.3), value: slides.isEmpty)
         .onChange(of: store.reveal) { if let r = store.reveal { withAnimation { proxy.scrollTo(r) } } }
         }
+        .task(id: store.list.keys.sorted()) { await store.loadListArt() }
     }
 
     func notes(_ a: Anime) -> String? {
+        if let n = Store.newEpisodes(store.list).first(where: { $0.id == a.id }) { return "Episode \(n.episode) is out" }
         guard let ep = a.nextEpisode, let at = a.nextAiring, at > Date() else { return nil }
         return "Ep \(ep) · " + at.formatted(.relative(presentation: .named))
     }
@@ -428,7 +435,15 @@ struct ScheduleView: View {
         let mine = Set(store.list.keys)
         let items = (store.schedule ?? []).filter { !store.onlyMine || mine.contains($0.anime.id) }
         let days = Dictionary(grouping: items) { Calendar.current.startOfDay(for: $0.at) }
+        let hero = store.heroOnTop ? store.upNext : nil
         ScrollView {
+            if let n = hero {
+                TimelineView(.everyMinute) { t in // the countdown ticks
+                    let mine = store.list[n.anime.id] != nil
+                    Carousel(store: store, slides: [Slide(anime: n.anime, note: (mine ? "Up next from My list" : "Up next") + " · episode \(n.episode) " + Self.countdown(n.at, now: t.date))])
+                }
+                .transition(.opacity)
+            }
             VStack(alignment: .leading, spacing: 24) {
                 Banners(store: store)
                 HStack {
@@ -460,7 +475,18 @@ struct ScheduleView: View {
             }
             .padding(24)
         }
+        .heroPage(hero != nil)
+        .animation(.easeOut(duration: 0.3), value: hero == nil)
         .task { await store.loadSchedule() }
+    }
+
+    // "in 3h 20m", "in 12m", or "tomorrow 09:30" when it's further off.
+    static func countdown(_ at: Date, now: Date) -> String {
+        let m = Int(at.timeIntervalSince(now) / 60)
+        if m < 1 { return "any minute now" }
+        if m < 60 { return "in \(m)m" }
+        if m < 12 * 60 { return "in \(m / 60)h \(m % 60)m" }
+        return at.formatted(.dateTime.weekday(.wide).hour().minute())
     }
 
     // Columns as the window allows, so the page isn't one long list down the left.
@@ -1055,14 +1081,7 @@ struct DetailView: View {
     // A full-width picture with the show laid over its lower left, like a cinema poster wall.
     @ViewBuilder func hero(_ a: Anime, loading: Bool) -> some View {
         ZStack(alignment: .bottomLeading) {
-            // In an overlay so a wide picture fills the space instead of widening the page.
-            Color.clear.frame(maxWidth: .infinity).frame(height: Self.heroHeight)
-                .overlay {
-                    if loading { Rectangle().fill(.quaternary).shimmer() }
-                    // Its own banner (or one borrowed from the series), else the trailer's still, else the top of the poster.
-                    else { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
-                }
-                .clipped()
+            HeroPicture(a: a, height: Self.heroHeight, loading: loading)
             HeroShade()
             HStack(alignment: .bottom, spacing: 28) {
                 Poster(url: a.poster, width: 170, height: 246).shadow(color: .black.opacity(0.6), radius: 18, y: 8)
@@ -1504,6 +1523,33 @@ func prettyDate(_ s: String?) -> String? {
     return s
 }
 
+// The big picture at the top of a page. It scrolls at half speed, so the page seems to slide over it.
+struct HeroPicture: View {
+    let a: Anime
+    let height: CGFloat
+    var loading = false
+
+    var body: some View {
+        // In an overlay so a wide picture fills the space instead of widening the page.
+        Color.clear.frame(maxWidth: .infinity).frame(height: height)
+            .overlay {
+                if loading { Rectangle().fill(.quaternary).shimmer() }
+                // Its own banner (or one borrowed from the series), else the trailer's still, else the top of the poster.
+                else { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
+            }
+            .visualEffect { c, g in c.offset(y: max(0, -g.frame(in: .scrollView).minY) * 0.5) }
+            .clipped()
+    }
+}
+
+extension View {
+    // A page whose hero picture runs up under the toolbar, over one solid colour so the picture's fade has nothing to meet.
+    func heroPage(_ on: Bool) -> some View {
+        ignoresSafeArea(edges: on ? .top : [])
+            .background { if on { Theme.skyBottom.ignoresSafeArea() } }
+    }
+}
+
 // Night on the left for the words, melting into the page at the bottom. Under the show page's and the carousel's pictures.
 struct HeroShade: View {
     var body: some View {
@@ -1577,10 +1623,7 @@ struct Carousel: View {
     var body: some View {
         let s = slides[i], a = s.anime
         ZStack(alignment: .bottomLeading) {
-            Color.clear.frame(maxWidth: .infinity).frame(height: Self.height)
-                .overlay { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
-                .clipped()
-                .id(a.id).transition(.opacity)
+            HeroPicture(a: a, height: Self.height).id(a.id).transition(.opacity)
             HeroShade()
             VStack(alignment: .leading, spacing: 12) {
                 Text(s.note.uppercased()).font(.caption.weight(.heavy)).tracking(1.5).foregroundStyle(Theme.gold)
@@ -1606,7 +1649,7 @@ struct Carousel: View {
             .padding(.bottom, 40)
         }
         .frame(height: Self.height)
-        .overlay(alignment: .bottomTrailing) { dots.padding(.trailing, 24).padding(.bottom, 44) }
+        .overlay(alignment: .bottomTrailing) { if slides.count > 1 { dots.padding(.trailing, 24).padding(.bottom, 44) } }
         .overlay(alignment: .leading) { if hover, slides.count > 1 { arrow("chevron.left", -1).padding(.leading, 12) } }
         .overlay(alignment: .trailing) { if hover, slides.count > 1 { arrow("chevron.right", 1).padding(.trailing, 12) } }
         .environment(\.colorScheme, .dark) // white on the picture, in Light mode too
@@ -1642,5 +1685,61 @@ struct Carousel: View {
         .buttonStyle(.plain)
         .help(step < 0 ? "Previous" : "Next")
         .transition(.opacity)
+    }
+}
+
+// A row of wide picture cards (My list's Watching), paged like the poster rows.
+struct WideRow: View {
+    @ObservedObject var store: Store
+    let title: String
+    let items: [Anime]
+    var notes: (Anime) -> String? = { _ in nil }
+    static let w: CGFloat = 300, h: CGFloat = 169
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionTitle(title)
+            PagedRow(store: store, key: "wide:" + title, step: Self.w + 18, height: Self.h + 56, arrowHeight: Self.h) {
+                ForEach(items) { a in WideCard(store: store, a: a, note: notes(a), row: "wide:" + title) }
+            }
+        }
+        .id(title)
+    }
+}
+
+struct WideCard: View {
+    @ObservedObject var store: Store
+    let a: Anime
+    var note: String?
+    var row = ""
+    var key: String { row + "|" + a.id }
+
+    var body: some View {
+        let hover = store.hoverCard == key
+        NavigationLink(value: a) {
+            VStack(alignment: .leading, spacing: 8) {
+                ZStack(alignment: .bottomLeading) {
+                    Color.clear.frame(width: WideRow.w, height: WideRow.h)
+                        .overlay { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
+                        .clipped()
+                    LinearGradient(colors: [.clear, Theme.night.opacity(0.85)], startPoint: .center, endPoint: .bottom)
+                    if let note { Text(note).font(.caption.weight(.heavy)).foregroundStyle(Theme.gold).padding(10) }
+                }
+                .frame(width: WideRow.w, height: WideRow.h)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                Text(a.title).font(.headline).lineLimit(1)
+            }
+            .frame(width: WideRow.w, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .shadow(color: Theme.pink.opacity(hover ? 0.55 : 0), radius: 18, y: 6)
+        .scaleEffect(hover ? 1.04 : 1, anchor: .bottom)
+        .zIndex(hover ? 1 : 0)
+        .animation(.easeOut(duration: 0.15), value: hover)
+        .onHover { inside in
+            if inside { store.hoverCard = key } else if store.hoverCard == key { store.hoverCard = nil }
+        }
+        .help("Open \(a.title)")
     }
 }

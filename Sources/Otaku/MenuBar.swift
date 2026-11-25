@@ -79,7 +79,7 @@ struct MenuBarPanel: View {
             } else if today.isEmpty {
                 Text("Nothing from My list airs today.").font(.callout).foregroundStyle(.secondary)
             } else {
-                ForEach(today) { row($0) }
+                ForEach(today) { tile($0) }
             }
 
             if !later.isEmpty {
@@ -115,6 +115,33 @@ struct MenuBarPanel: View {
                     .font(.caption.bold()).monospacedDigit()
                     .foregroundStyle(s.at <= Date() ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.sunset))
             }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open \(s.anime.title)")
+    }
+
+    // Today's episodes as little banners, like the app's big pictures.
+    func tile(_ s: Airing) -> some View {
+        Button { show(s.anime) } label: {
+            ZStack(alignment: .leading) {
+                Color.clear.frame(maxWidth: .infinity).frame(height: 64)
+                    .overlay { BannerImage(urls: [s.anime.banner, s.anime.trailer?.still].compactMap { $0 }, poster: s.anime.poster) }
+                    .clipped()
+                LinearGradient(colors: [Theme.night.opacity(0.9), Theme.night.opacity(0.3)], startPoint: .leading, endPoint: .trailing)
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.anime.title).font(.callout.weight(.semibold)).lineLimit(1)
+                        Text("Episode \(s.episode)").font(.caption).foregroundStyle(.white.opacity(0.7))
+                    }
+                    Spacer()
+                    Text(when(s.at)).font(.caption.bold()).monospacedDigit()
+                        .foregroundStyle(s.at <= Date() ? AnyShapeStyle(.white.opacity(0.6)) : AnyShapeStyle(Theme.gold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

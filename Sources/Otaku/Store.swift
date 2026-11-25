@@ -118,7 +118,49 @@ enum Tab: String, CaseIterable {
         return Array((mine + rest).prefix(8))
     }
 
-    var showsCarousel: Bool { tab == .discover && path.isEmpty && results == nil && !searching && !slides.isEmpty }
+    // Discover's picture: the top search result, or the carousel.
+    var discoverSlides: [Slide] {
+        if let r = results { return r.first.map { [Slide(anime: $0, note: resultsFor.isEmpty ? "Most popular · " + resultsTitle : "Top result")] } ?? [] }
+        return searching ? [] : slides
+    }
+
+    // My list's carousel: new episodes, then Watching, then Favourites; only shows with a banner.
+    var listSlides: [Slide] {
+        let fresh = Dictionary(Self.newEpisodes(list).map { ($0.id, $0.episode) }, uniquingKeysWith: { a, _ in a })
+        func rank(_ e: Entry) -> Int { fresh[e.anime.id] != nil ? 0 : e.status == .watching ? 1 : e.favourite ? 2 : 3 }
+        return list.values.filter { rank($0) < 3 }
+            .sorted { (rank($0), $0.anime.title) < (rank($1), $1.anime.title) }
+            .map { e in Slide(anime: art(e.anime), note: fresh[e.anime.id].map { "Episode \($0) is out" } ?? (e.status == .watching ? "Watching" : "Favourite")) }
+            .filter { $0.anime.banner != nil }
+            .prefix(8).map { $0 }
+    }
+
+    // The next episode to air: from My list if any, else anything.
+    var upNext: Airing? {
+        let now = Date()
+        return myEpisodes.first { $0.at > now } ?? schedule?.filter { $0.at > now }.min { $0.at < $1.at }
+    }
+
+    // Whether this page starts with a big picture that runs up under the toolbar.
+    var heroOnTop: Bool {
+        guard path.isEmpty else { return false }
+        switch tab {
+        case .discover: return !discoverSlides.isEmpty
+        case .list: return !listSlides.isEmpty
+        case .schedule: return upNext != nil
+        }
+    }
+
+    // Banners and synopses for My list (saved entries are cards, which have neither).
+    @Published var listArt: [String: Anime] = [:]
+    func art(_ a: Anime) -> Anime { listArt[a.id] ?? a }
+
+    func loadListArt() async {
+        let ids = list.keys.filter { $0.hasPrefix("anilist:") }.sorted().prefix(50).compactMap { Int($0.dropFirst("anilist:".count)) }
+        guard !ids.isEmpty else { return }
+        let found = await fetch("list-art", [{ try await AniList.featured(ids: Array(ids)) }], main: false) ?? []
+        listArt = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    }
 
     // Start page rows: Trending, then the personal ones, then the rest.
     var discoverRows: [Row] { home.map { Array($0.rows.prefix(1) + forYou + $0.rows.dropFirst()) } ?? [] }
