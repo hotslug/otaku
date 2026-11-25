@@ -36,6 +36,9 @@ enum Tab: String, CaseIterable {
 
     @Published var home: Home?
     @Published var forYou: [Row] = [] // "Because you liked…" rows, from Favourites
+    @Published var newForYou: [Anime] = [] // carousel: shows on My list with a new episode this week
+    @Published var slide = 0 // carousel: the slide showing
+    @Published var slideHover = false // carousel: held while the pointer is on it
     @Published var query = ""
     @Published var filters = Filters() { didSet { if filters != oldValue { Task { await search() } } } }
     @Published var results: [Anime]?
@@ -83,6 +86,39 @@ enum Tab: String, CaseIterable {
     func loadHome() async {
         if home == nil { home = await fetch("home-rows", [{ try await AniList.home() }, { try await Kitsu.home() }]) }
     }
+
+    // Shows on My list whose last episode came out this week, newest first, with that episode's number.
+    // ponytail: "this week" = the next episode is due within 7 days, so it assumes weekly shows; good enough for a headline.
+    static func newEpisodes(_ list: [String: Entry], now: Date = Date()) -> [(id: String, episode: Int)] {
+        list.values.filter { $0.status != .finished && ($0.status != nil || $0.favourite) && $0.anime.id.hasPrefix("anilist:") }
+            .compactMap { e -> (String, Int, Date)? in
+                guard let n = e.anime.nextEpisode, n > 1, let at = e.anime.nextAiring, at > now, at < now.addingTimeInterval(7 * 86400) else { return nil }
+                return (e.anime.id, n - 1, at)
+            }
+            .sorted { $0.2 > $1.2 } // furthest next episode = the one that came out most recently
+            .map { (id: $0.0, episode: $0.1) }
+    }
+
+    func loadNewForYou() async {
+        let picks = Array(Self.newEpisodes(list).prefix(3))
+        let ids = picks.compactMap { Int($0.id.dropFirst("anilist:".count)) }
+        guard !ids.isEmpty else { newForYou = []; return }
+        newForYou = await fetch("featured:" + ids.map(String.init).joined(separator: ","), [{ try await AniList.featured(ids: ids) }], main: false)
+            ?? picks.compactMap { list[$0.id]?.anime }
+    }
+
+    // The start page carousel: your new episodes first, then trending shows that have a banner.
+    var slides: [Slide] {
+        let fresh = Dictionary(Self.newEpisodes(list).map { ($0.id, $0.episode) }, uniquingKeysWith: { a, _ in a })
+        let mine = newForYou.map { Slide(anime: $0, note: fresh[$0.id].map { "Episode \($0) is out" } ?? "On your list") }
+        let row = home?.rows.first
+        let rest = (row?.items ?? []).enumerated()
+            .filter { $0.element.banner != nil && !newForYou.map(\.id).contains($0.element.id) }
+            .map { Slide(anime: $0.element, note: "\(row!.title) · #\($0.offset + 1)") }
+        return Array((mine + rest).prefix(8))
+    }
+
+    var showsCarousel: Bool { tab == .discover && path.isEmpty && results == nil && !searching && !slides.isEmpty }
 
     // Start page rows: Trending, then the personal ones, then the rest.
     var discoverRows: [Row] { home.map { Array($0.rows.prefix(1) + forYou + $0.rows.dropFirst()) } ?? [] }
@@ -313,3 +349,5 @@ enum Tab: String, CaseIterable {
         }
     }
 }
+
+struct Slide: Identifiable { let anime: Anime; let note: String; var id: String { anime.id } }

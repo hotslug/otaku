@@ -103,6 +103,14 @@ import Foundation
     }
 
     static func run() -> Int32 {
+        do { // carousel: a show on My list whose next episode is due in 3 days had its last one this week; finished or far-off shows don't count
+            let now = Date(), mk = { (id: String, ep: Int?, days: Double, st: Status?) in
+                Entry(anime: Anime(id: id, title: id, synopsis: "", genres: [], links: [], titles: [], nextEpisode: ep, nextAiring: now.addingTimeInterval(days * 86400)), status: st) }
+            let list = ["anilist:1": mk("anilist:1", 8, 3, .watching), "anilist:2": mk("anilist:2", 5, 6, .watching), "anilist:3": mk("anilist:3", 8, 20, .watching),
+                        "anilist:4": mk("anilist:4", 8, 3, .finished), "anilist:5": mk("anilist:5", 1, 3, .watching), "anilist:6": mk("anilist:6", 8, 3, nil)]
+            let n = Store.newEpisodes(list, now: now)
+            check(n.map(\.id) == ["anilist:2", "anilist:1"] && n.map(\.episode) == [4, 7], "carousel: new episodes this week, newest first")
+        }
         check(prettyDate("2023-09-29")?.contains("2023") == true && prettyDate("2023-09-29") != "2023-09-29" && prettyDate("2023") == "2023" && prettyDate(nil) == nil, "pretty dates")
         check(Import.tag("my_status", in: "<anime><series_animedb_id>21</series_animedb_id><my_status>Plan to Watch</my_status></anime>") == "Plan to Watch"
               && Import.status(mal: "Plan to Watch") == .planning && Import.status(mal: "Dropped") == nil && Import.status(anilist: "COMPLETED") == .finished, "import: MAL/AniList statuses")

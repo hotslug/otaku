@@ -94,7 +94,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.sky.ignoresSafeArea())
             .toolbarBackground(Theme.dusk, for: .windowToolbar) // match the night sky below
-            .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+            .toolbarBackgroundVisibility(store.showsCarousel ? .hidden : .visible, for: .windowToolbar) // the carousel runs up under it
             .navigationTitle("Otaku")
             .navigationDestination(for: Anime.self) { a in
                 DetailView(store: store, anime: a)
@@ -214,8 +214,10 @@ struct DiscoverView: View {
     @ObservedObject var store: Store
 
     var body: some View {
+        let slides = store.showsCarousel ? store.slides : []
         ScrollViewReader { proxy in
         ScrollView {
+            if !slides.isEmpty { Carousel(store: store, slides: slides).transition(.opacity) }
             VStack(alignment: .leading, spacing: 28) {
                 Banners(store: store)
                 FilterBar(store: store)
@@ -235,9 +237,13 @@ struct DiscoverView: View {
             .animation(.easeOut(duration: 0.3), value: store.searching)
             .animation(.easeOut(duration: 0.4), value: store.home == nil)
         }
+        // With the carousel, its picture runs up under the toolbar like a show's page.
+        .ignoresSafeArea(edges: slides.isEmpty ? [] : .top)
+        .background { if !slides.isEmpty { Theme.skyBottom.ignoresSafeArea() } } // one colour under the picture, so its fade has nothing to meet
         .onChange(of: store.reveal) { if let r = store.reveal { withAnimation { proxy.scrollTo(r) } } }
         }
         .task(id: store.list.values.filter(\.favourite).map(\.anime.id).sorted()) { await store.loadForYou() }
+        .task(id: Store.newEpisodes(store.list).map(\.id)) { await store.loadNewForYou() }
     }
 }
 
@@ -1015,26 +1021,6 @@ struct DetailView: View {
         }
     }
 
-    // Uses the card (`anime`) as the list key, so the entry matches wherever the show is opened from.
-    @ViewBuilder func listControls(_ a: Anime) -> some View {
-        let e = store.list[anime.id]
-        HStack(spacing: 8) {
-            // Both pills keep one width whatever they say, so the title beside them never re-wraps.
-            FilterChip(icon: e?.status == nil ? "plus" : "checkmark", label: e?.status?.rawValue ?? "Add to My list", active: e?.status != nil,
-                       tip: e?.status == nil ? "Add to My list" : "Change or remove", sizedFor: ["Add to My list"] + Status.allCases.map(\.rawValue)) {
-                StatusItems(store: store, a: anime)
-            }
-            Button { store.toggleFavourite(anime) } label: {
-                ZStack {
-                    Label("Add to Favourites", systemImage: "star").hidden()
-                    Label(e?.favourite == true ? "Favourite" : "Add to Favourites", systemImage: e?.favourite == true ? "star.fill" : "star")
-                }
-            }
-            .buttonStyle(ChipStyle(active: e?.favourite == true))
-            .help(e?.favourite == true ? "Remove from Favourites" : "Add to Favourites")
-        }
-    }
-
     @ViewBuilder func stats(_ a: Anime, loading: Bool) -> some View {
         if loading { SkeletonLines(widths: [180, 150, 120, 110, 130]).transition(.identity) }
         else {
@@ -1077,19 +1063,14 @@ struct DetailView: View {
                     else { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
                 }
                 .clipped()
-            // Night on the left for the words, melting into the page at the bottom.
-            LinearGradient(stops: [.init(color: Theme.night.opacity(0.92), location: 0), .init(color: Theme.night.opacity(0.55), location: 0.45), .init(color: .clear, location: 0.8)],
-                           startPoint: .leading, endPoint: .trailing)
-            LinearGradient(stops: [.init(color: Theme.night.opacity(0.45), location: 0), .init(color: .clear, location: 0.25),
-                                   .init(color: .clear, location: 0.5), .init(color: Theme.skyBottom, location: 1)],
-                           startPoint: .top, endPoint: .bottom)
+            HeroShade()
             HStack(alignment: .bottom, spacing: 28) {
                 Poster(url: a.poster, width: 170, height: 246).shadow(color: .black.opacity(0.6), radius: 18, y: 8)
                 VStack(alignment: .leading, spacing: 12) {
                     if let n = a.native { Text(n).font(.title3).foregroundStyle(.white.opacity(0.7)).textSelection(.enabled) }
                     Text(a.title).font(.system(size: 44, weight: .heavy)).foregroundStyle(.white).lineLimit(2).textSelection(.enabled)
                         .shadow(color: .black.opacity(0.5), radius: 8)
-                    if !loading { facts(a) }
+                    if !loading { HeroFacts(a: a) }
                     if let ep = a.nextEpisode, let at = a.nextAiring, at > Date() {
                         Label("Episode \(ep) airs " + at.formatted(.dateTime.weekday(.wide).day().month().hour().minute()), systemImage: "calendar")
                             .font(.headline).foregroundStyle(Theme.gold)
@@ -1100,7 +1081,7 @@ struct DetailView: View {
                                 .buttonStyle(ChipStyle(active: true))
                                 .help("Play the trailer")
                         }
-                        listControls(a).fixedSize()
+                        ListControls(store: store, anime: anime).fixedSize()
                     }
                     .padding(.top, 4)
                 }
@@ -1112,27 +1093,6 @@ struct DetailView: View {
         }
         .frame(height: Self.heroHeight)
         .animation(.easeOut(duration: 0.35), value: loading)
-    }
-
-    // 2023 · TV · 28 episodes · Finished  ★ 90   [Adventure] [Drama]
-    @ViewBuilder func facts(_ a: Anime) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                if let sc = a.score { Label("\(sc)", systemImage: "star.fill").foregroundStyle(Theme.gold).fontWeight(.bold) }
-                Text([a.year, a.format, a.episodes.map { "\($0) episodes" }, a.status].compactMap { $0 }.joined(separator: "  ·  "))
-                    .foregroundStyle(.white.opacity(0.85))
-            }
-            .font(.title3.weight(.medium))
-            if !a.genres.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(a.genres.prefix(5), id: \.self) { g in
-                        Text(g).font(.caption.weight(.semibold)).padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(.white.opacity(0.12), in: Capsule()).overlay(Capsule().strokeBorder(.white.opacity(0.2)))
-                    }
-                }
-            }
-        }
-        .transition(.opacity)
     }
 
     @ViewBuilder func whereToWatch(_ a: Anime) -> some View {
@@ -1542,4 +1502,145 @@ func prettyDate(_ s: String?) -> String? {
         if let d = f.date(from: s) { f.locale = .current; f.setLocalizedDateFormatFromTemplate(to); return f.string(from: d) }
     }
     return s
+}
+
+// Night on the left for the words, melting into the page at the bottom. Under the show page's and the carousel's pictures.
+struct HeroShade: View {
+    var body: some View {
+        LinearGradient(stops: [.init(color: Theme.night.opacity(0.92), location: 0), .init(color: Theme.night.opacity(0.55), location: 0.45), .init(color: .clear, location: 0.8)],
+                       startPoint: .leading, endPoint: .trailing)
+        LinearGradient(stops: [.init(color: Theme.night.opacity(0.45), location: 0), .init(color: .clear, location: 0.25),
+                               .init(color: .clear, location: 0.5), .init(color: Theme.skyBottom, location: 1)],
+                       startPoint: .top, endPoint: .bottom)
+    }
+}
+
+// ★ 90  2023 · TV · 28 episodes · Finished, then genre pills.
+struct HeroFacts: View {
+    let a: Anime
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                if let sc = a.score { Label("\(sc)", systemImage: "star.fill").foregroundStyle(Theme.gold).fontWeight(.bold) }
+                Text([a.year, a.format, a.episodes.map { "\($0) episodes" }, a.status].compactMap { $0 }.joined(separator: "  ·  "))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .font(.title3.weight(.medium))
+            if !a.genres.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(a.genres.prefix(5), id: \.self) { g in
+                        Text(g).font(.caption.weight(.semibold)).padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(.white.opacity(0.12), in: Capsule()).overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                    }
+                }
+            }
+        }
+        .transition(.opacity)
+    }
+}
+
+// Add to My list + Favourite pills. Pass the card's `anime` so the entry matches wherever the show is opened from.
+struct ListControls: View {
+    @ObservedObject var store: Store
+    let anime: Anime
+
+    var body: some View {
+        let e = store.list[anime.id]
+        HStack(spacing: 8) {
+            // Both pills keep one width whatever they say, so nothing beside them re-wraps.
+            FilterChip(icon: e?.status == nil ? "plus" : "checkmark", label: e?.status?.rawValue ?? "Add to My list", active: e?.status != nil,
+                       tip: e?.status == nil ? "Add to My list" : "Change or remove", sizedFor: ["Add to My list"] + Status.allCases.map(\.rawValue)) {
+                StatusItems(store: store, a: anime)
+            }
+            Button { store.toggleFavourite(anime) } label: {
+                ZStack {
+                    Label("Add to Favourites", systemImage: "star").hidden()
+                    Label(e?.favourite == true ? "Favourite" : "Add to Favourites", systemImage: e?.favourite == true ? "star.fill" : "star")
+                }
+            }
+            .buttonStyle(ChipStyle(active: e?.favourite == true))
+            .help(e?.favourite == true ? "Remove from Favourites" : "Add to Favourites")
+        }
+    }
+}
+
+// The start page's big picture: your new episodes, then what's trending. Moves on every 8 seconds; hovering holds it.
+struct Carousel: View {
+    @ObservedObject var store: Store
+    let slides: [Slide]
+    static let height: CGFloat = 470
+    // Kept in the store, like the rest of the app's view state.
+    var i: Int { get { min(store.slide, slides.count - 1) } nonmutating set { store.slide = newValue } }
+    var hover: Bool { get { store.slideHover } nonmutating set { store.slideHover = newValue } }
+
+    var body: some View {
+        let s = slides[i], a = s.anime
+        ZStack(alignment: .bottomLeading) {
+            Color.clear.frame(maxWidth: .infinity).frame(height: Self.height)
+                .overlay { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
+                .clipped()
+                .id(a.id).transition(.opacity)
+            HeroShade()
+            VStack(alignment: .leading, spacing: 12) {
+                Text(s.note.uppercased()).font(.caption.weight(.heavy)).tracking(1.5).foregroundStyle(Theme.gold)
+                Text(a.title).font(.system(size: 42, weight: .heavy)).foregroundStyle(.white).lineLimit(2)
+                    .shadow(color: .black.opacity(0.5), radius: 8)
+                HeroFacts(a: a)
+                let body = Synopsis.split(a.synopsis).body
+                if !body.isEmpty {
+                    Text(body).font(.system(size: 15)).lineSpacing(4).foregroundStyle(.white.opacity(0.8)).lineLimit(2)
+                        .frame(maxWidth: 600, alignment: .leading)
+                }
+                HStack(spacing: 8) {
+                    NavigationLink(value: a) { Label("More info", systemImage: "info.circle") }
+                        .buttonStyle(ChipStyle(active: true))
+                        .help("Open \(a.title)")
+                    ListControls(store: store, anime: a).fixedSize()
+                }
+                .padding(.top, 4)
+            }
+            .id(a.id).transition(.opacity)
+            .frame(maxWidth: 820, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 40)
+        }
+        .frame(height: Self.height)
+        .overlay(alignment: .bottomTrailing) { dots.padding(.trailing, 24).padding(.bottom, 44) }
+        .overlay(alignment: .leading) { if hover, slides.count > 1 { arrow("chevron.left", -1).padding(.leading, 12) } }
+        .overlay(alignment: .trailing) { if hover, slides.count > 1 { arrow("chevron.right", 1).padding(.trailing, 12) } }
+        .environment(\.colorScheme, .dark) // white on the picture, in Light mode too
+        .onHover { hover = $0 }
+        .animation(.easeInOut(duration: 0.6), value: i)
+        .animation(.easeOut(duration: 0.15), value: hover)
+        .task(id: "\(i) \(hover) \(slides.count)") { // restarts the 8 seconds after every move, and stops while hovered
+            guard !hover, slides.count > 1 else { return }
+            try? await Task.sleep(for: .seconds(8))
+            if !Task.isCancelled { i = (i + 1) % slides.count }
+        }
+    }
+
+    var dots: some View {
+        HStack(spacing: 6) {
+            ForEach(slides.indices, id: \.self) { n in
+                Button { i = n } label: {
+                    Capsule().fill(n == i ? AnyShapeStyle(Theme.sunset) : AnyShapeStyle(.white.opacity(0.35)))
+                        .frame(width: n == i ? 22 : 8, height: 8).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(slides[n].anime.title)
+            }
+        }
+    }
+
+    func arrow(_ symbol: String, _ step: Int) -> some View {
+        Button { i = (i + step + slides.count) % slides.count } label: {
+            Image(systemName: symbol).font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 44, height: 44).background(Theme.night.opacity(0.5), in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(0.2)))
+        }
+        .buttonStyle(.plain)
+        .help(step < 0 ? "Previous" : "Next")
+        .transition(.opacity)
+    }
 }

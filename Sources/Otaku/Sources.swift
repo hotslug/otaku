@@ -228,6 +228,15 @@ enum AniList {
         return (["WINTER", "SPRING", "SUMMER", "FALL"][(c.month! - 1) / 3], c.year!)
     }
 
+    static let heroFields = "bannerImage description(asHtml:false) trailer{id site thumbnail}"
+
+    // Shows for the carousel, with banner and synopsis, in the order asked.
+    static func featured(ids: [Int]) async throws -> [Anime] {
+        let d = try await query("query($ids:[Int]){Page(perPage:10){media(id_in:$ids,type:ANIME){\(cardFields) \(heroFields)}}}", ["ids": ids])
+        let found = d.d("Page")?.a("media").map(parse) ?? []
+        return ids.compactMap { id in found.first { $0.id == "anilist:\(id)" } }
+    }
+
     // All start-page rows in one request.
     static func home(now: Date = Date()) async throws -> Home {
         let (season, year) = season(now)
@@ -243,7 +252,8 @@ enum AniList {
             ("Popular in Fantasy", "genre:\"Fantasy\",sort:POPULARITY_DESC"),
             ("Popular isekai", "tag:\"Isekai\",sort:POPULARITY_DESC"),
         ]
-        let q = rows.enumerated().map { "r\($0.offset): Page(perPage:20){media(type:ANIME,isAdult:false,\($0.element.1)){\(cardFields)}}" }.joined(separator: " ")
+        // Trending also brings banners and synopses: it feeds the start page carousel.
+        let q = rows.enumerated().map { "r\($0.offset): Page(perPage:20){media(type:ANIME,isAdult:false,\($0.element.1)){\(cardFields)\($0.offset == 0 ? " " + heroFields : "")}}" }.joined(separator: " ")
         let d = try await query("{\(q)}")
         return Home(rows: rows.enumerated().map { Row(title: $0.element.0, items: d.d("r\($0.offset)")?.a("media").map(parse) ?? []) }.filter { !$0.items.isEmpty })
     }
