@@ -940,62 +940,24 @@ struct DetailView: View {
         let a = store.details[anime.id] ?? anime
         let loading = store.details[anime.id] == nil
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if loading {
-                    // Cards don't carry the banner, so hold its space while loading instead of shoving the page down later.
-                    RoundedRectangle(cornerRadius: 10).fill(.quaternary).frame(height: 160).shimmer().transition(.identity)
-                } else {
-                    // Its own banner (or one borrowed from the series), else the trailer's still, else the top of the poster.
-                    BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster)
-                        .frame(height: 160).frame(maxWidth: .infinity).clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .mask(LinearGradient(stops: [.init(color: .black, location: 0.45), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom)) // melts into the sky
-                }
-                HStack(alignment: .top, spacing: 22) {
-                    Poster(url: a.poster, width: 200, height: 290)
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .center, spacing: 16) {
-                            Text(a.title).font(.largeTitle.bold()).textSelection(.enabled)
-                            Spacer(minLength: 0)
-                            listControls(a).fixedSize() // across from the title, on the right
-                        }
-                        if let n = a.native { Text(n).font(.title3).foregroundStyle(.secondary).textSelection(.enabled) }
-                        if let ep = a.nextEpisode, let at = a.nextAiring, at > Date() {
-                            Label("Episode \(ep) airs " + at.formatted(.dateTime.weekday(.wide).day().month().hour().minute()), systemImage: "calendar")
-                                .foregroundStyle(Theme.sunset)
-                                .font(.headline)
-                        }
-                        // Stats with the synopsis beside them, filling the space under the buttons;
-                        // on a narrow window the synopsis drops below the stats instead.
-                        if store.detailWidth >= 760 {
-                            HStack(alignment: .top, spacing: 36) {
-                                stats(a, loading: loading).fixedSize()
-                                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.statsWidth = $0 }
-                                synopsis(a, loading: loading)
-                            }
-                        } else {
-                            VStack(alignment: .leading, spacing: 18) {
-                                stats(a, loading: loading)
-                                synopsis(a, loading: loading)
-                            }
-                        }
+            hero(a, loading: loading)
+            VStack(alignment: .leading, spacing: 28) {
+                // Synopsis with the remaining facts beside it; stacked when the window is narrow.
+                if store.detailWidth >= 760 {
+                    HStack(alignment: .top, spacing: 48) {
+                        synopsis(a, loading: loading)
+                        stats(a, loading: loading).fixedSize()
                     }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.detailWidth = $0 }
+                } else {
+                    VStack(alignment: .leading, spacing: 18) {
+                        synopsis(a, loading: loading)
+                        stats(a, loading: loading)
+                    }
                 }
                 if loading {
                     SkeletonStrip().transition(.identity)
                 } else {
-                // Trailer and where to watch side by side; stacked when the window is narrow.
-                if a.trailer != nil, store.detailWidth >= 560 {
-                    HStack(alignment: .top, spacing: 36) {
-                        // as wide as poster + stats, so "Where to watch" lines up under the synopsis
-                        trailer(a, width: store.detailWidth >= 760 ? max(360, 200 + 22 + store.statsWidth) : 360)
-                        whereToWatch(a).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                } else {
-                    trailer(a)
-                    whereToWatch(a)
-                }
+                whereToWatch(a)
                 if let cast = a.cast, !cast.isEmpty {
                     let hasEnglish = cast.contains { $0.english != nil }
                     let english = hasEnglish && store.englishCast
@@ -1018,13 +980,15 @@ struct DetailView: View {
                 }
             }
             .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading) // full width even when nothing below is wide
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.detailWidth = $0 }
             .animation(.easeOut(duration: 0.35), value: loading)
             moreToWatch(a, loading: loading)
         }
-        .background(Theme.sky.ignoresSafeArea())
-        .toolbarBackground(Theme.dusk, for: .windowToolbar)
-        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-        .navigationTitle(a.title)
+        .ignoresSafeArea(edges: .top) // the picture runs up under the toolbar
+        .background(Theme.skyBottom.ignoresSafeArea()) // one colour under the picture, so its fade has nothing to meet
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .navigationTitle("") // the title is on the picture
         .sheet(item: $store.playing) { t in TrailerPlayer(store: store, trailer: t, title: a.title) }
         .task { await store.loadDetail(anime) }
     }
@@ -1072,19 +1036,14 @@ struct DetailView: View {
     }
 
     @ViewBuilder func stats(_ a: Anime, loading: Bool) -> some View {
-        if loading { SkeletonLines(widths: [180, 150, 120, 90, 110, 70, 100, 130, 220]).transition(.identity) }
+        if loading { SkeletonLines(widths: [180, 150, 120, 110, 130]).transition(.identity) }
         else {
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
                 row("Started", prettyDate(a.start))
                 row("Ended", prettyDate(a.end))
-                row("Status", a.status)
-                row("Format", a.format)
                 row("Seasons", seasons(a))
-                row("Episodes", a.episodes.map(String.init))
-                row("Score", a.score.map { "\($0) / 100" })
                 row("Fans", a.popularity?.formatted())
                 row("Studio", a.studio)
-                row("Genres", a.genres.isEmpty ? nil : a.genres.joined(separator: ", "))
             }
             .transition(.opacity)
         }
@@ -1105,22 +1064,75 @@ struct DetailView: View {
         if let v { GridRow { Text(k).foregroundStyle(.secondary); Text(v).textSelection(.enabled) } }
     }
 
-    @ViewBuilder func trailer(_ a: Anime, width: CGFloat = 360) -> some View {
-        if let t = a.trailer {
-            VStack(alignment: .leading, spacing: 12) {
-                SectionTitle("Trailer")
-                Button { store.playing = t } label: {
-                    FadeImage(url: t.thumbnail)
-                        .frame(width: width, height: (width * 9 / 16).rounded()).clipped()
-                        .overlay(Color.black.opacity(0.25))
-                        .overlay(Image(systemName: "play.circle.fill").font(.system(size: 58)).foregroundStyle(.white).shadow(radius: 6))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .contentShape(Rectangle())
+    static let heroHeight: CGFloat = 520
+
+    // A full-width picture with the show laid over its lower left, like a cinema poster wall.
+    @ViewBuilder func hero(_ a: Anime, loading: Bool) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            // In an overlay so a wide picture fills the space instead of widening the page.
+            Color.clear.frame(maxWidth: .infinity).frame(height: Self.heroHeight)
+                .overlay {
+                    if loading { Rectangle().fill(.quaternary).shimmer() }
+                    // Its own banner (or one borrowed from the series), else the trailer's still, else the top of the poster.
+                    else { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
                 }
-                .buttonStyle(.plain)
-                .help("Play the trailer")
+                .clipped()
+            // Night on the left for the words, melting into the page at the bottom.
+            LinearGradient(stops: [.init(color: Theme.night.opacity(0.92), location: 0), .init(color: Theme.night.opacity(0.55), location: 0.45), .init(color: .clear, location: 0.8)],
+                           startPoint: .leading, endPoint: .trailing)
+            LinearGradient(stops: [.init(color: Theme.night.opacity(0.45), location: 0), .init(color: .clear, location: 0.25),
+                                   .init(color: .clear, location: 0.5), .init(color: Theme.skyBottom, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+            HStack(alignment: .bottom, spacing: 28) {
+                Poster(url: a.poster, width: 170, height: 246).shadow(color: .black.opacity(0.6), radius: 18, y: 8)
+                VStack(alignment: .leading, spacing: 12) {
+                    if let n = a.native { Text(n).font(.title3).foregroundStyle(.white.opacity(0.7)).textSelection(.enabled) }
+                    Text(a.title).font(.system(size: 44, weight: .heavy)).foregroundStyle(.white).lineLimit(2).textSelection(.enabled)
+                        .shadow(color: .black.opacity(0.5), radius: 8)
+                    if !loading { facts(a) }
+                    if let ep = a.nextEpisode, let at = a.nextAiring, at > Date() {
+                        Label("Episode \(ep) airs " + at.formatted(.dateTime.weekday(.wide).day().month().hour().minute()), systemImage: "calendar")
+                            .font(.headline).foregroundStyle(Theme.gold)
+                    }
+                    HStack(spacing: 8) {
+                        if let t = a.trailer {
+                            Button { store.playing = t } label: { Label("Play trailer", systemImage: "play.fill") }
+                                .buttonStyle(ChipStyle(active: true))
+                                .help("Play the trailer")
+                        }
+                        listControls(a).fixedSize()
+                    }
+                    .padding(.top, 4)
+                }
+                .frame(maxWidth: 760, alignment: .leading)
+            }
+            .environment(\.colorScheme, .dark) // white on the picture, in Light mode too
+            .padding(.horizontal, 24)
+            .padding(.bottom, 8)
+        }
+        .frame(height: Self.heroHeight)
+        .animation(.easeOut(duration: 0.35), value: loading)
+    }
+
+    // 2023 · TV · 28 episodes · Finished  ★ 90   [Adventure] [Drama]
+    @ViewBuilder func facts(_ a: Anime) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                if let sc = a.score { Label("\(sc)", systemImage: "star.fill").foregroundStyle(Theme.gold).fontWeight(.bold) }
+                Text([a.year, a.format, a.episodes.map { "\($0) episodes" }, a.status].compactMap { $0 }.joined(separator: "  ·  "))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .font(.title3.weight(.medium))
+            if !a.genres.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(a.genres.prefix(5), id: \.self) { g in
+                        Text(g).font(.caption.weight(.semibold)).padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(.white.opacity(0.12), in: Capsule()).overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                    }
+                }
             }
         }
+        .transition(.opacity)
     }
 
     @ViewBuilder func whereToWatch(_ a: Anime) -> some View {

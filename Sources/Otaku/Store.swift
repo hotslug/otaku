@@ -27,8 +27,7 @@ enum Tab: String, CaseIterable {
     @Published var reveal: String? // row or card the arrow keys moved to: scrolled into view
     @Published var hoverCard: String?
     @Published var confirmRemove: Anime? // waiting for "Remove from My list?" to be answered
-    @Published var statsWidth: CGFloat = 200 // the stats column on a show's page; the trailer matches poster + stats
-    @Published var detailWidth: CGFloat = 1000 // width beside the poster on a show's page; narrow puts the synopsis under the stats
+    @Published var detailWidth: CGFloat = 1000 // a show's page width; narrow puts the facts under the synopsis
     @Published var expandedLinks: Set<String> = [] // link lists showing "+N more" expanded
     @Published var schedule: [Airing]?
     @Published var onlyMine = UserDefaults.standard.bool(forKey: "onlyMine") { didSet { UserDefaults.standard.set(onlyMine, forKey: "onlyMine") } }
