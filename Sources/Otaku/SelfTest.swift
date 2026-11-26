@@ -1,6 +1,5 @@
 import Foundation
 
-// OTAKU_SELFTEST=1 .build/debug/Otaku  — offline checks of the parsing/matching logic.
 @MainActor enum SelfTest {
     static var failures = 0
 
@@ -8,7 +7,6 @@ import Foundation
         if !ok { failures += 1; print("FAIL (SelfTest.swift:\(line)): \(what)") }
     }
 
-    // OTAKU_LIVE=1 also hits the real APIs.
     static func live() {
         var done = false
         Task {
@@ -27,7 +25,7 @@ import Foundation
                 step = "AniList.recommended()"
                 let fy = try await AniList.recommended(for: [Anime(id: "anilist:154587", title: "Frieren", synopsis: "", genres: [], links: [], titles: [])])
                 check(fy.count == 1 && fy[0].title == "Because you liked Frieren" && fy[0].items.count >= 5, "because you liked: rows")
-                step = "Import.mal()" // a tiny gzipped export: Frieren (watching), FMA:B (completed), Naruto (dropped, skipped)
+                step = "Import.mal()"
                 let xml = FileManager.default.temporaryDirectory.appendingPathComponent("otaku-mal-test.xml")
                 try Data("<myanimelist><anime><series_animedb_id>52991</series_animedb_id><my_status>Watching</my_status></anime><anime><series_animedb_id>5114</series_animedb_id><my_status>Completed</my_status></anime><anime><series_animedb_id>20</series_animedb_id><my_status>Dropped</my_status></anime></myanimelist>".utf8).write(to: xml)
                 _ = try? FileManager.default.removeItem(atPath: xml.path + ".gz")
@@ -35,7 +33,7 @@ import Foundation
                 let mal = try await Import.mal(file: URL(fileURLWithPath: xml.path + ".gz"))
                 check(mal.items.count == 2 && mal.missing == 0 && mal.items.contains { $0.anime.title.hasPrefix("Frieren") && $0.status == .watching }
                       && mal.items.contains { $0.anime.title.hasPrefix("Fullmetal") && $0.status == .finished }, "import: MAL export mapped to AniList: \(mal.items.map { "\($0.anime.title)=\($0.status?.rawValue ?? "-")" })")
-                if let u = ProcessInfo.processInfo.environment["OTAKU_IMPORT_USER"] { // try a real public AniList list without touching My list
+                if let u = ProcessInfo.processInfo.environment["OTAKU_IMPORT_USER"] {
                     let items = try await Import.anilist(user: u)
                     print("AniList import of \(u): \(items.count) shows, \(items.filter(\.favourite).count) favourites,", Dictionary(grouping: items) { $0.status?.rawValue ?? "fav only" }.mapValues(\.count))
                 }
@@ -59,7 +57,6 @@ import Foundation
                 let qf = try await AniList.search("gundam", Filters(format: "MOVIE"))
                 check(!qf.isEmpty && qf.allSatisfy { $0.format == "Movie" }, "search + format filter")
                 step = "Kitsu.search('', Filters(year: 2024, format: "
-                // Kitsu counts late-December starts in the next season, so 2023 is fine here.
                 let kf = try await Kitsu.search("", Filters(year: 2024, format: "MOVIE"))
                 check(!kf.isEmpty && kf.allSatisfy { $0.format == "Movie" && ["2023", "2024"].contains($0.year ?? "") }, "kitsu filters: \(kf.prefix(3).map { "\($0.title) \($0.year ?? "") \($0.format ?? "")" })")
                 step = "Kitsu.search('frieren')"
@@ -103,7 +100,7 @@ import Foundation
     }
 
     static func run() -> Int32 {
-        do { // carousel: a show on My list whose next episode is due in 3 days had its last one this week; finished or far-off shows don't count
+        do {
             let now = Date(), mk = { (id: String, ep: Int?, days: Double, st: Status?) in
                 Entry(anime: Anime(id: id, title: id, synopsis: "", genres: [], links: [], titles: [], nextEpisode: ep, nextAiring: now.addingTimeInterval(days * 86400)), status: st) }
             let list = ["anilist:1": mk("anilist:1", 8, 3, .watching), "anilist:2": mk("anilist:2", 5, 6, .watching), "anilist:3": mk("anilist:3", 8, 20, .watching),
@@ -118,20 +115,19 @@ import Foundation
         check(Filters.recentSeasons(now: Date(timeIntervalSince1970: 1_795_000_000)).prefix(2) == ["WINTER 2027", "FALL 2026"], "season list starts with next season")
         check(plain("A<br>\nB <i>c</i> &quot;d&quot; &amp; e") == "A\n\nB c \"d\" & e", "html stripped: \(plain("A<br>\nB <i>c</i> &quot;d&quot; &amp; e"))")
 
-        // S1(TV) -> movie -> S2(TV) -> S3(TV, 3 hops away: the chain may go on)
         func node(_ id: Int, _ f: String, _ edges: [(String, J)] = []) -> J {
             ["id": id, "format": f, "relations": ["edges": edges.map { ["relationType": $0.0, "node": $0.1] }]]
         }
-        let s4: J = ["id": 4, "format": "TV"] // beyond the query depth: no relations field
+        let s4: J = ["id": 4, "format": "TV"]
         let root = node(1, "TV", [("SEQUEL", node(10, "MOVIE", [("SEQUEL", node(2, "TV", [("SEQUEL", s4)]))])), ("SIDE_STORY", node(99, "TV"))])
         var c = AniList.Chain()
         c.add([root])
         check(c.tv.count == 3 && c.frontier == [4], "seasons through a movie, ignores side stories: \(c.tv) \(c.frontier)")
         c.frontier = []
-        c.add([node(4, "TV", [("PREQUEL", node(2, "TV")), ("SEQUEL", node(5, "TV", []))])]) // follow-up request
+        c.add([node(4, "TV", [("PREQUEL", node(2, "TV")), ("SEQUEL", node(5, "TV", []))])])
         check(c.tv.count == 4 && c.frontier == [5], "follow-up adds S5 once, revisits nothing, S5's empty list gets loaded: \(c.tv) \(c.frontier)")
         c.frontier = []
-        c.add([node(5, "TV", [])]) // loaded as a top-level node: really has nothing more
+        c.add([node(5, "TV", [])])
         check(c.tv.count == 4 && c.frontier.isEmpty, "chain ends when a loaded show has no sequels")
         var c1 = AniList.Chain()
         c1.add([node(1, "TV", [("ADAPTATION", node(5, "MANGA"))])])
@@ -148,7 +144,6 @@ import Foundation
         check(directLink("Netflix basic with Ads", links)?.host == "nf.com", "netflix variant matched")
         check(directLink("Hulu", links) == nil, "no false match")
 
-        // My list: which shows get alerts, and a damaged list file is kept aside, not lost.
         func entry(_ id: String, _ st: Status?, fav: Bool = false) -> Entry {
             Entry(anime: Anime(id: id, title: id, synopsis: "", genres: [], links: [], titles: []), status: st, favourite: fav)
         }
@@ -179,7 +174,6 @@ import Foundation
         let g = Buttons.group([("Hulu", u), ("Hoopla (Sub)", u), ("Hoopla (Dub)", u), ("Crunchyroll", u), ("YouTube (VIZ Media)", u)])
         check(g.map(\.name) == ["Crunchyroll", "Hulu", "Hoopla", "YouTube"] && g[2].variants.map(\.0) == ["Sub", "Dub"] && g[3].variants.map(\.0) == ["VIZ Media"],
               "links grouped, big services first: \(g.map { "\($0.name) \($0.variants.map(\.0))" })")
-        // Movie of the Night: a sample show, as their docs describe it.
         let show: J = ["title": "Frieren: Beyond Journey's End", "tmdbId": "tv/209867", "firstAirYear": 2023, "seasonCount": 1,
                        "genres": [["id": "animation", "name": "Animation"]],
                        "streamingOptions": ["gb": [

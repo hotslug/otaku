@@ -2,7 +2,6 @@ import AppKit
 import ServiceManagement
 import UserNotifications
 
-// Mac notifications for new episodes. Needs a real app bundle: a bare `swift run` binary has none.
 enum Alerts {
     static var available: Bool { Bundle.main.bundleIdentifier != nil }
 
@@ -21,7 +20,6 @@ enum Alerts {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id + body, content: c, trigger: nil))
     }
 
-    // Alerts only arrive while Otaku runs, so offer to start it at login.
     static var openAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set { _ = try? newValue ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister() }

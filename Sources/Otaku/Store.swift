@@ -11,46 +11,45 @@ enum Tab: String, CaseIterable {
 
     @Published var tab = Tab.discover
     @Published var inMenuBar = UserDefaults.standard.object(forKey: "inMenuBar") as? Bool ?? true { didSet { UserDefaults.standard.set(inMenuBar, forKey: "inMenuBar") } }
-    var scheduleDay = "" // the day the loaded week starts on
+    var scheduleDay = ""
 
-    // This week's episodes for shows on My list (favourites included).
     var myEpisodes: [Airing] { (schedule ?? []).filter { list[$0.anime.id] != nil }.sorted { $0.at < $1.at } }
-    @Published var appearance = Appearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .dark { // the night sky by default
+    @Published var appearance = Appearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .dark {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "appearance"); appearance.apply() }
     }
-    @Published var rowScroll: [String: ScrollPosition] = [:] // per row title
-    @Published var rowX: [String: CGFloat] = [:] // how far each row is scrolled
-    @Published var rowEnd: [String: CGFloat] = [:] // furthest it can scroll
+    @Published var rowScroll: [String: ScrollPosition] = [:]
+    @Published var rowX: [String: CGFloat] = [:]
+    @Published var rowEnd: [String: CGFloat] = [:]
     @Published var hoverRow: String?
-    var rowWidth: [String: CGFloat] = [:] // visible width of each row, for paging to a highlighted card
-    var gridCols = 1 // cards per line in the results grid, for ↑ ↓
-    @Published var reveal: String? // row or card the arrow keys moved to: scrolled into view
+    var rowWidth: [String: CGFloat] = [:]
+    var gridCols = 1
+    @Published var reveal: String?
     @Published var hoverCard: String?
-    @Published var confirmRemove: Anime? // waiting for "Remove from My list?" to be answered
-    @Published var detailWidth: CGFloat = 1000 // a show's page width; narrow puts the facts under the synopsis
-    @Published var expandedLinks: Set<String> = [] // link lists showing "+N more" expanded
+    @Published var confirmRemove: Anime?
+    @Published var detailWidth: CGFloat = 1000
+    @Published var expandedLinks: Set<String> = []
     @Published var schedule: [Airing]?
     @Published var onlyMine = UserDefaults.standard.bool(forKey: "onlyMine") { didSet { UserDefaults.standard.set(onlyMine, forKey: "onlyMine") } }
     @Published var alertsOn = UserDefaults.standard.object(forKey: "alertsOn") as? Bool ?? true { didSet { UserDefaults.standard.set(alertsOn, forKey: "alertsOn") } }
     @Published var list: [String: Entry] = Store.loadList() { didSet { saveList() } }
 
     @Published var home: Home?
-    @Published var forYou: [Row] = [] // "Because you liked…" rows, from Favourites
-    @Published var newForYou: [Anime] = [] // carousel: shows on My list with a new episode this week
-    @Published var slide = 0 // carousel: the slide showing
-    @Published var slideHover = false // carousel: held while the pointer is on it
+    @Published var forYou: [Row] = []
+    @Published var newForYou: [Anime] = []
+    @Published var slide = 0
+    @Published var slideHover = false
     @Published var query = ""
     @Published var filters = Filters() { didSet { if filters != oldValue { Task { await search() } } } }
     @Published var results: [Anime]?
     @Published var searching = false
-    @Published var playing: Trailer? // trailer shown in the player sheet
+    @Published var playing: Trailer?
     @Published var englishCast = UserDefaults.standard.bool(forKey: "englishCast") { didSet { UserDefaults.standard.set(englishCast, forKey: "englishCast") } }
     @Published var resultsFor = ""
     @Published var path: [Anime] = []
     @Published var details: [String: Anime] = [:]
     @Published var watch: [String: Watch] = [:]
-    @Published var fallback = false // AniList didn't answer, so this came from the backup (Kitsu)
-    @Published var stale = false // showing saved data because every source failed
+    @Published var fallback = false
+    @Published var stale = false
     @Published var error: String?
     @Published var tmdbKey = UserDefaults.standard.string(forKey: "tmdbKey") ?? "" {
         didSet { UserDefaults.standard.set(tmdbKey, forKey: "tmdbKey"); watch = [:] }
@@ -65,7 +64,6 @@ enum Tab: String, CaseIterable {
     var region: String { Locale.current.region?.identifier ?? "US" }
     var regionName: String { Locale.current.localizedString(forRegionCode: region) ?? region }
 
-    // Tries each source in order; saves the first answer, or falls back to the last saved one.
     func fetch<T: Codable>(_ cacheKey: String, _ sources: [() async throws -> T], main: Bool = true) async -> T? {
         let file = Cache.url(cacheKey)
         for (i, source) in sources.enumerated() {
@@ -87,15 +85,13 @@ enum Tab: String, CaseIterable {
         if home == nil { home = await fetch("home-rows", [{ try await AniList.home() }, { try await Kitsu.home() }]) }
     }
 
-    // Shows on My list whose last episode came out this week, newest first, with that episode's number.
-    // ponytail: "this week" = the next episode is due within 7 days, so it assumes weekly shows; good enough for a headline.
     static func newEpisodes(_ list: [String: Entry], now: Date = Date()) -> [(id: String, episode: Int)] {
         list.values.filter { $0.status != .finished && ($0.status != nil || $0.favourite) && $0.anime.id.hasPrefix("anilist:") }
             .compactMap { e -> (String, Int, Date)? in
                 guard let n = e.anime.nextEpisode, n > 1, let at = e.anime.nextAiring, at > now, at < now.addingTimeInterval(7 * 86400) else { return nil }
                 return (e.anime.id, n - 1, at)
             }
-            .sorted { $0.2 > $1.2 } // furthest next episode = the one that came out most recently
+            .sorted { $0.2 > $1.2 }
             .map { (id: $0.0, episode: $0.1) }
     }
 
@@ -107,7 +103,6 @@ enum Tab: String, CaseIterable {
             ?? picks.compactMap { list[$0.id]?.anime }
     }
 
-    // The start page carousel: your new episodes first, then trending shows that have a banner.
     var slides: [Slide] {
         let fresh = Dictionary(Self.newEpisodes(list).map { ($0.id, $0.episode) }, uniquingKeysWith: { a, _ in a })
         let mine = newForYou.map { Slide(anime: $0, note: fresh[$0.id].map { "Episode \($0) is out" } ?? "On your list") }
@@ -118,13 +113,11 @@ enum Tab: String, CaseIterable {
         return Array((mine + rest).prefix(8))
     }
 
-    // Discover's picture: the top search result, or the carousel.
     var discoverSlides: [Slide] {
         if let r = results { return r.first.map { [Slide(anime: $0, note: resultsFor.isEmpty ? "Most popular · " + resultsTitle : "Top result")] } ?? [] }
         return searching ? [] : slides
     }
 
-    // My list's carousel: new episodes, then Watching, then Favourites; only shows with a banner.
     var listSlides: [Slide] {
         let fresh = Dictionary(Self.newEpisodes(list).map { ($0.id, $0.episode) }, uniquingKeysWith: { a, _ in a })
         func rank(_ e: Entry) -> Int { fresh[e.anime.id] != nil ? 0 : e.status == .watching ? 1 : e.favourite ? 2 : 3 }
@@ -135,13 +128,11 @@ enum Tab: String, CaseIterable {
             .prefix(8).map { $0 }
     }
 
-    // The next episode to air: from My list if any, else anything.
     var upNext: Airing? {
         let now = Date()
         return myEpisodes.first { $0.at > now } ?? schedule?.filter { $0.at > now }.min { $0.at < $1.at }
     }
 
-    // Whether this page starts with a big picture that runs up under the toolbar.
     var heroOnTop: Bool {
         guard path.isEmpty else { return false }
         switch tab {
@@ -151,7 +142,6 @@ enum Tab: String, CaseIterable {
         }
     }
 
-    // Banners and synopses for My list (saved entries are cards, which have neither).
     @Published var listArt: [String: Anime] = [:]
     func art(_ a: Anime) -> Anime { listArt[a.id] ?? a }
 
@@ -162,19 +152,16 @@ enum Tab: String, CaseIterable {
         listArt = Dictionary(found.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
-    // Start page rows: Trending, then the personal ones, then the rest.
     var discoverRows: [Row] { home.map { Array($0.rows.prefix(1) + forYou + $0.rows.dropFirst()) } ?? [] }
 
     var resultsTitle: String { resultsFor.isEmpty ? (filters.seasonTag.map(Filters.label) ?? "Filtered") : "Results for “\(resultsFor)”" }
 
-    // My list as rows: Favourites, then each status, A-Z.
     var myListRows: [Row] {
         let entries = list.values.sorted { $0.anime.title.localizedCaseInsensitiveCompare($1.anime.title) == .orderedAscending }
         return ([Row(title: "★ Favourites", items: entries.filter(\.favourite).map(\.anime))]
             + Status.allCases.map { s in Row(title: s.rawValue, items: entries.filter { $0.status == s }.map(\.anime)) }).filter { !$0.items.isEmpty }
     }
 
-    // Two favourites (picked at random, so the rows vary) -> their recommendations, minus shows already in My list.
     func loadForYou() async {
         let picks = Array(list.values.filter { $0.favourite && $0.anime.id.hasPrefix("anilist:") }.map(\.anime).shuffled().prefix(2))
         let rows = picks.isEmpty ? [] : await fetch("for-you:" + picks.map(\.id).sorted().joined(separator: ","),
@@ -183,29 +170,27 @@ enum Tab: String, CaseIterable {
         if ProcessInfo.processInfo.environment["OTAKU_LOG"] != nil { FileHandle.standardError.write(Data("for you: \(forYou.map { "\($0.title) (\($0.items.count))" })\n".utf8)) }
     }
 
-    // Runs for a search term, filters, or both.
     func search() async {
         let q = query.trimmingCharacters(in: .whitespaces), f = filters
         guard !q.isEmpty || f.active else { results = nil; searching = false; return }
         searching = true
         if ProcessInfo.processInfo.environment["OTAKU_LOG"] != nil { FileHandle.standardError.write(Data("search: \(q.isEmpty ? "(filters)" : q)\n".utf8)) }
         let r = await fetch("search:\(q.lowercased()):\(f.key)", [{ try await AniList.search(q, f) }, { try await Kitsu.search(q, f) }]) ?? []
-        guard q == query.trimmingCharacters(in: .whitespaces), f == filters else { return } // changed while loading
+        guard q == query.trimmingCharacters(in: .whitespaces), f == filters else { return }
         searching = false
         results = r
         resultsFor = q
     }
 
-    // "Surprise me": a random well-rated show that fits the current filters and isn't on My list yet, opened straight away.
     @Published var surprising = false
 
     func surprise() async {
         surprising = true
         defer { surprising = false }
         var f = filters
-        f.sort = "POPULARITY_DESC" // known shows, so the surprise is a good one
+        f.sort = "POPULARITY_DESC"
         var pool: [Anime] = []
-        for page in [Int.random(in: 1...5), 1] where pool.isEmpty { // a random page of the top 200; page 1 if the filters are narrow
+        for page in [Int.random(in: 1...5), 1] where pool.isEmpty {
             pool = ((try? await AniList.search("", f, page: page, minScore: 70)) ?? []).filter { list[$0.id] == nil }
         }
         if pool.isEmpty { pool = ((try? await Kitsu.search("", f)) ?? []).filter { list[$0.id] == nil } }
@@ -214,19 +199,18 @@ enum Tab: String, CaseIterable {
         path = [pick]
     }
 
-    // Search as you type: waits for a short pause, so a word costs one request, not one per letter.
     var typing: Task<Void, Never>?
 
     func typed() {
         typing?.cancel()
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard q.isEmpty || q.count >= 2 else { return } // one letter: wait for more
+        guard q.isEmpty || q.count >= 2 else { return }
         typing = Task {
             if !q.isEmpty { try? await Task.sleep(for: .milliseconds(550)) }
             guard !Task.isCancelled, q == query.trimmingCharacters(in: .whitespaces) else { return }
-            if !q.isEmpty, q == resultsFor, results != nil { return } // already searched (e.g. Enter, then a click on a result)
-            if !q.isEmpty, tab != .discover || !path.isEmpty { tab = .discover; path = [] } // typing elsewhere: show the results
-            await search() // empty: back to filters only, or the start page
+            if !q.isEmpty, q == resultsFor, results != nil { return }
+            if !q.isEmpty, tab != .discover || !path.isEmpty { tab = .discover; path = [] }
+            await search()
         }
     }
 
@@ -241,13 +225,12 @@ enum Tab: String, CaseIterable {
             var d = await fetch("detail:" + a.id, a.id.hasPrefix("kitsu:")
                 ? [{ try await Kitsu.detail(id: a.id) }]
                 : [{ try await AniList.detail(a.id) }, { try await Kitsu.detail(title: title) }]) ?? a
-            if let t = d.trailer, await !t.alive() { d.trailer = nil } // checked before the page shows, so nothing jumps
+            if let t = d.trailer, await !t.alive() { d.trailer = nil }
             details[a.id] = d
         }
         await loadWatch(a)
     }
 
-    // Movie of the Night first (direct links, fine for a paid app), TMDB as the fallback.
     func loadWatch(_ a: Anime) async {
         let key = key, motn = motn, region = region
         guard hasWatchKey, watch[a.id] == nil else { return }
@@ -264,10 +247,9 @@ enum Tab: String, CaseIterable {
         Task { await loadWatch(a) }
     }
 
-    // MARK: My list. Saved in Application Support (not Caches: this is the user's data).
 
     nonisolated static let listFile: URL = {
-        if let test = ProcessInfo.processInfo.environment["OTAKU_LIST"] { return URL(fileURLWithPath: test) } // for layout checks
+        if let test = ProcessInfo.processInfo.environment["OTAKU_LIST"] { return URL(fileURLWithPath: test) }
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Otaku")
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d.appendingPathComponent("list.json")
@@ -276,7 +258,6 @@ enum Tab: String, CaseIterable {
     nonisolated static func loadList(from file: URL = listFile) -> [String: Entry] {
         guard let data = try? Data(contentsOf: file) else { return [:] }
         if let l = try? JSONDecoder().decode([String: Entry].self, from: data) { return l }
-        // Unreadable: keep it aside instead of overwriting it on the next save.
         try? FileManager.default.moveItem(at: file, to: file.appendingPathExtension("broken-\(Int(Date().timeIntervalSince1970))"))
         return [:]
     }
@@ -298,7 +279,6 @@ enum Tab: String, CaseIterable {
         put(a.id, e)
     }
 
-    // Import: shows already on My list keep their status; favourites only get added.
     @Published var importing = false
     @Published var importNote: String?
     @Published var anilistUser = UserDefaults.standard.string(forKey: "anilistUser") ?? "" { didSet { UserDefaults.standard.set(anilistUser, forKey: "anilistUser") } }
@@ -312,7 +292,7 @@ enum Tab: String, CaseIterable {
             e.favourite = e.favourite || i.favourite
             l[i.anime.id] = e
         }
-        list = l // one save
+        list = l
         return added
     }
 
@@ -350,20 +330,17 @@ enum Tab: String, CaseIterable {
         path = [e.anime]
     }
 
-    // MARK: Schedule
 
     func loadSchedule(force: Bool = false) async {
         let start = Calendar.current.startOfDay(for: Date())
         let end = Calendar.current.date(byAdding: .day, value: 7, to: start)!
         let day = ISO8601DateFormatter.string(from: start, timeZone: .current, formatOptions: [.withFullDate])
-        guard schedule == nil || force || day != scheduleDay else { return } // a new day: reload
+        guard schedule == nil || force || day != scheduleDay else { return }
         scheduleDay = day
         schedule = await fetch("schedule:" + day, [{ try await AniList.schedule(from: start, to: end) }]) ?? []
     }
 
-    // MARK: New-episode alerts
 
-    // Shows to alert on: on the list, not finished, from AniList (Kitsu has no airing times).
     static func alertIds(_ list: [String: Entry]) -> [Int] {
         list.filter { $0.value.status != .finished && ($0.value.status != nil || $0.value.favourite) }
             .compactMap { $0.key.hasPrefix("anilist:") ? Int($0.key.dropFirst("anilist:".count)) : nil }.sorted()
@@ -373,10 +350,9 @@ enum Tab: String, CaseIterable {
         let ids = Self.alertIds(list)
         let last = UserDefaults.standard.object(forKey: "lastAiringCheck") as? Date
         guard !ids.isEmpty else { UserDefaults.standard.set(now, forKey: "lastAiringCheck"); return }
-        if alertsOn { Alerts.ask() } // no-op once you've answered macOS's prompt
-        // First check ever: look back only an hour, so adding a show doesn't dump old episodes on you.
+        if alertsOn { Alerts.ask() }
         let from = max(last ?? now.addingTimeInterval(-3600), now.addingTimeInterval(-7 * 86400))
-        guard let r = try? await AniList.airing(ids: ids, from: from, to: now) else { return } // retry next time, same window
+        guard let r = try? await AniList.airing(ids: ids, from: from, to: now) else { return }
         UserDefaults.standard.set(now, forKey: "lastAiringCheck")
         for (id, next) in r.next {
             guard var e = list["anilist:\(id)"] else { continue }

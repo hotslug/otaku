@@ -1,7 +1,6 @@
 import CryptoKit
 import Foundation
 
-// Data sources: AniList (primary), Kitsu (fallback), TMDB (optional, needs a key: per-country availability).
 
 typealias J = [String: Any]
 
@@ -15,7 +14,7 @@ extension Dictionary where Key == String, Value == Any {
 struct StreamLink: Codable, Hashable { var site: String; var url: URL; var note: String? }
 
 struct Anime: Codable, Hashable, Identifiable {
-    var id: String // "anilist:16498" or "kitsu:7442"
+    var id: String
     var title: String
     var native: String?
     var synopsis: String
@@ -24,22 +23,22 @@ struct Anime: Codable, Hashable, Identifiable {
     var status: String?
     var episodes: Int?
     var format: String?
-    var score: Int? // 0-100
+    var score: Int?
     var popularity: Int?
     var genres: [String]
     var studio: String?
     var poster: URL?
     var banner: URL?
     var links: [StreamLink]
-    var titles: [String] // English + romaji, for matching on other sites
+    var titles: [String]
     var tvSeasons: Int?
-    var seasonsMore = false // the sequel chain went further than we looked
+    var seasonsMore = false
     var nextEpisode: Int?
     var nextAiring: Date?
-    var related: [Related]? // details page only
-    var recommended: [Anime]? // details page only
+    var related: [Related]?
+    var recommended: [Anime]?
     var trailer: Trailer?
-    var cast: [CastMember]? // details page only
+    var cast: [CastMember]?
     var year: String? { start.map { String($0.prefix(4)) } }
     var isMovie: Bool { format == "Movie" }
 }
@@ -53,7 +52,7 @@ struct Person: Codable, Hashable { var name: String; var image: URL? }
 
 struct CastMember: Codable, Hashable {
     var name: String
-    var role: String // Main, Supporting, Background
+    var role: String
     var image: URL?
     var japanese: Person?
     var english: Person?
@@ -61,14 +60,12 @@ struct CastMember: Codable, Hashable {
 
 struct Trailer: Codable, Hashable, Identifiable {
     var id: String
-    var site: String // "youtube" or "dailymotion"
+    var site: String
     var thumbnail: URL?
 
     var page: URL? { URL(string: site == "youtube" ? "https://www.youtube.com/watch?v=\(id)" : "https://www.dailymotion.com/video/\(id)") }
-    // YouTube's widescreen still for the video (not every upload has one).
     var still: URL? { site == "youtube" ? URL(string: "https://i.ytimg.com/vi/\(id)/maxresdefault.jpg") : thumbnail }
 
-    // False only when the site says the video is gone, private or won't embed (any 4xx); offline or a hiccup counts as alive.
     func alive() async -> Bool {
         let check = site == "youtube" ? "https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=\(id)"
                                       : "https://api.dailymotion.com/video/\(id)?fields=id"
@@ -80,7 +77,6 @@ struct Trailer: Codable, Hashable, Identifiable {
         URL(string: site == "youtube" ? "https://www.youtube.com/embed/\(id)?autoplay=1&playsinline=1&rel=0" : "https://www.dailymotion.com/embed/video/\(id)?autoplay=1")
     }
 
-    // YouTube won't play in a bare web view (error 153): the player must sit in a page that names the app.
     var playerHTML: String {
         """
         <html><body style="margin:0;background:#000;overflow:hidden">
@@ -93,13 +89,12 @@ struct Trailer: Codable, Hashable, Identifiable {
     var siteName: String { site == "youtube" ? "YouTube" : "Dailymotion" }
 }
 
-// Search filters. Values are AniList's names; Kitsu gets them translated.
 struct Filters: Codable, Equatable {
     var genre: String?
     var year: Int?
     var format: String?
     var status: String?
-    var season: String? // WINTER/SPRING/SUMMER/FALL, always with `year`
+    var season: String?
     var sort = "POPULARITY_DESC"
 
     static let genres = ["Action", "Adventure", "Comedy", "Drama", "Ecchi", "Fantasy", "Horror", "Mahou Shoujo", "Mecha", "Music", "Mystery",
@@ -111,7 +106,6 @@ struct Filters: Codable, Equatable {
     var active: Bool { genre != nil || year != nil || format != nil || status != nil || season != nil || sort != Filters().sort }
     var key: String { [genre ?? "", year.map(String.init) ?? "", format ?? "", status ?? "", season ?? "", sort].joined(separator: "|") }
 
-    // Seasons as "WINTER 2027", for the season picker and its ‹ › steps.
     static let seasonNames = ["WINTER", "SPRING", "SUMMER", "FALL"]
     var seasonTag: String? { season.flatMap { s in year.map { "\(s) \($0)" } } }
     static func label(_ tag: String) -> String { tag.capitalized }
@@ -120,7 +114,6 @@ struct Filters: Codable, Equatable {
         let p = tag.split(separator: " "), i = (Int(p[1]) ?? 2000) * 4 + (seasonNames.firstIndex(of: String(p[0])) ?? 0) + n
         return "\(seasonNames[i % 4]) \(i / 4)"
     }
-    // Next season, this one, then the last three years.
     static func recentSeasons(now: Date = Date()) -> [String] {
         let (s, y) = AniList.season(now)
         return (-12...1).reversed().map { shift("\(s) \(y)", by: $0) }
@@ -145,7 +138,7 @@ struct Entry: Codable {
 struct Candidate: Codable, Hashable, Identifiable { var id: Int; var name: String; var year: String? }
 
 struct Watch: Codable {
-    var tmdbId: Int? // nil = no match
+    var tmdbId: Int?
     var name = ""
     var year: String?
     var seasons: Int?
@@ -154,7 +147,7 @@ struct Watch: Codable {
     var buy: [String] = []
     var link: URL?
     var candidates: [Candidate]
-    var direct: [String: URL] = [:] // service name -> straight to the show on that service
+    var direct: [String: URL] = [:]
     var source = "JustWatch via TMDB"
 }
 
@@ -175,7 +168,6 @@ enum Net {
     static func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s }
 }
 
-// Last good answer per request, so the app still shows something when every source is down.
 enum Cache {
     static let dir: URL = {
         let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Otaku")
@@ -194,7 +186,7 @@ func plain(_ html: String) -> String {
     for (e, c) in ["&quot;": "\"", "&#039;": "'", "&lt;": "<", "&gt;": ">", "&mdash;": "—", "&rsquo;": "’", "&nbsp;": " ", "&amp;": "&"] {
         t = t.replacingOccurrences(of: e, with: c)
     }
-    t = t.replacingOccurrences(of: #"[ \t]*\n[ \t]*"#, with: "\n", options: .regularExpression) // tidy spaces around line breaks
+    t = t.replacingOccurrences(of: #"[ \t]*\n[ \t]*"#, with: "\n", options: .regularExpression)
     return t.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
@@ -211,7 +203,7 @@ enum AniList {
     static let fields = "id title{english romaji native} description(asHtml:false) startDate{year month day} endDate{year month day} status episodes format averageScore popularity genres studios(isMain:true){nodes{name}} coverImage{large} bannerImage externalLinks{site url type notes} nextAiringEpisode{episode airingAt} trailer{id site thumbnail}"
 
     static func query(_ q: String, _ vars: J = [:]) async throws -> J {
-        if ProcessInfo.processInfo.environment["OTAKU_NO_ANILIST"] != nil { throw URLError(.cannotConnectToHost) } // test: AniList down
+        if ProcessInfo.processInfo.environment["OTAKU_NO_ANILIST"] != nil { throw URLError(.cannotConnectToHost) }
         var r = URLRequest(url: URL(string: "https://graphql.anilist.co")!)
         r.httpMethod = "POST"
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -220,7 +212,6 @@ enum AniList {
         return d
     }
 
-    // Lighter fields for start-page cards; the details page loads the rest.
     static let cardFields = "id title{english romaji native} startDate{year month day} status episodes format averageScore popularity genres coverImage{large} nextAiringEpisode{episode airingAt}"
 
     static func season(_ d: Date) -> (String, Int) {
@@ -230,14 +221,12 @@ enum AniList {
 
     static let heroFields = "bannerImage description(asHtml:false) trailer{id site thumbnail}"
 
-    // Shows for the carousel, with banner and synopsis, in the order asked.
     static func featured(ids: [Int]) async throws -> [Anime] {
         let d = try await query("query($ids:[Int]){Page(perPage:50){media(id_in:$ids,type:ANIME){\(cardFields) \(heroFields)}}}", ["ids": ids])
         let found = d.d("Page")?.a("media").map(parse) ?? []
         return ids.compactMap { id in found.first { $0.id == "anilist:\(id)" } }
     }
 
-    // All start-page rows in one request.
     static func home(now: Date = Date()) async throws -> Home {
         let (season, year) = season(now)
         let rows: [(String, String)] = [
@@ -252,13 +241,11 @@ enum AniList {
             ("Popular in Fantasy", "genre:\"Fantasy\",sort:POPULARITY_DESC"),
             ("Popular isekai", "tag:\"Isekai\",sort:POPULARITY_DESC"),
         ]
-        // Trending also brings banners and synopses: it feeds the start page carousel.
         let q = rows.enumerated().map { "r\($0.offset): Page(perPage:20){media(type:ANIME,isAdult:false,\($0.element.1)){\(cardFields)\($0.offset == 0 ? " " + heroFields : "")}}" }.joined(separator: " ")
         let d = try await query("{\(q)}")
         return Home(rows: rows.enumerated().map { Row(title: $0.element.0, items: d.d("r\($0.offset)")?.a("media").map(parse) ?? []) }.filter { !$0.items.isEmpty })
     }
 
-    // "Because you liked…": AniList's community recommendations for a few shows, in one request.
     static func recommended(for shows: [Anime]) async throws -> [Row] {
         let ids = shows.compactMap { Int($0.id.dropFirst("anilist:".count)) }
         guard !ids.isEmpty else { return [] }
@@ -271,11 +258,8 @@ enum AniList {
         }
     }
 
-    // Only filters that are set go into the query (AniList rejects some of them as null).
     static func search(_ q: String, _ f: Filters = Filters(), page: Int = 1, minScore: Int? = nil) async throws -> [Anime] {
         var params = ["$sort:[MediaSort]"], args = ["sort:$sort"]
-        // Matches ordered by the chosen sort (popular first by default): AniList's own "best match" can rank obscure shows
-        // first, e.g. "demon slayer" -> Onigiri, whose Japanese title means demon slayer.
         var vars: [String: Any] = ["sort": [f.sort]]
         func add(_ name: String, _ type: String, _ arg: String, _ value: Any?) {
             guard let value else { return }
@@ -286,7 +270,7 @@ enum AniList {
         add("min", "Int", "averageScore_greater", minScore)
         add("format", "MediaFormat", "format", f.format)
         add("status", "MediaStatus", "status", f.status)
-        if let season = f.season { // a season is AniList's own grouping (a show starting late December can be Winter)
+        if let season = f.season {
             add("season", "MediaSeason", "season", season)
             add("seasonYear", "Int", "seasonYear", f.year)
         } else {
@@ -297,7 +281,6 @@ enum AniList {
         return d.d("Page")?.a("media").map(parse) ?? []
     }
 
-    // AniList returns empty relations past 2 levels of nesting, so the chain is loaded 2 hops at a time.
     static let rel2 = "id format relations{edges{relationType node{id format relations{edges{relationType node{id format}}}}}}"
 
     static func detail(_ id: String) async throws -> Anime {
@@ -312,7 +295,6 @@ enum AniList {
             .filter { $0.s("type") == "ANIME" && $0["isAdult"] as? Bool != true }.map(parse)
         var chain = Chain()
         chain.add([m])
-        // ponytail: up to 5 follow-up requests (2 hops each; long series like Attack on Titan need 4); "N+" beyond that.
         for _ in 0..<5 where !chain.frontier.isEmpty {
             let ids = chain.frontier
             chain.frontier = []
@@ -327,7 +309,6 @@ enum AniList {
         return a
     }
 
-    // No banner of its own: borrow one from the same series (season 1 for a season 2, the show for its movie...).
     static func borrowedBanner(_ edges: [J]) -> URL? {
         let order = ["PREQUEL", "PARENT", "SEQUEL", "SIDE_STORY", "ALTERNATIVE", "SPIN_OFF"]
         return edges.compactMap { e -> (Int, URL)? in
@@ -337,7 +318,6 @@ enum AniList {
         }.min { $0.0 < $1.0 }?.1
     }
 
-    // Anime only (no manga/novels), in watch order: prequels, sequels, then the rest.
     static let relationOrder = ["PREQUEL", "SEQUEL", "PARENT", "SIDE_STORY", "SPIN_OFF", "ALTERNATIVE", "SUMMARY", "CHARACTER", "OTHER", "COMPILATION", "CONTAINS"]
 
     static func related(_ edges: [J]) -> [Related] {
@@ -351,9 +331,8 @@ enum AniList {
         .enumerated().sorted { ($0.element.0, $0.offset) < ($1.element.0, $1.offset) }.map(\.element.1)
     }
 
-    // Counts TV entries linked by sequel/prequel (through movies/OVAs too).
     struct Chain {
-        var seen = Set<Int>(), tv = Set<Int>(), frontier: [Int] = [] // frontier: reached, but links not loaded yet
+        var seen = Set<Int>(), tv = Set<Int>(), frontier: [Int] = []
 
         mutating func add(_ roots: [J]) { for r in roots { walk(r, root: true) } }
 
@@ -361,7 +340,6 @@ enum AniList {
             guard let id = n.i("id") else { return }
             guard seen.insert(id).inserted || root else { return }
             if ["TV", "TV_SHORT"].contains(n.s("format") ?? "") { tv.insert(id) }
-            // Missing or empty below the top: AniList sometimes leaves nested lists empty, so load it next round.
             guard let edges = n.d("relations")?.a("edges"), root || !edges.isEmpty else { frontier.append(id); return }
             for e in edges where ["SEQUEL", "PREQUEL"].contains(e.s("relationType") ?? "") {
                 if let c = e.d("node") { walk(c, root: false) }
@@ -417,12 +395,11 @@ enum AniList {
     }
 
     static func trailer(_ t: J?) -> Trailer? {
-        guard let t, let id = t.s("id")?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty, // some ids end in a tab
+        guard let t, let id = t.s("id")?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty,
               let site = t.s("site"), ["youtube", "dailymotion"].contains(site) else { return nil }
         return Trailer(id: id, site: site, thumbnail: t.s("thumbnail").flatMap(URL.init(string:)))
     }
 
-    // Every episode airing between two dates (a week is ~5 pages of 50).
     static func schedule(from: Date, to: Date) async throws -> [Airing] {
         var out: [Airing] = []
         for page in 1...10 {
@@ -438,7 +415,6 @@ enum AniList {
         return out
     }
 
-    // For new-episode alerts: what aired for these shows in a time window, and each one's next episode.
     static func airing(ids: [Int], from: Date, to: Date) async throws -> (aired: [(id: Int, episode: Int)], next: [Int: (Int, Date)?]) {
         let d = try await query("query($ids:[Int],$a:Int,$b:Int){aired:Page(perPage:50){airingSchedules(mediaId_in:$ids,airingAt_greater:$a,airingAt_lesser:$b,sort:TIME){episode mediaId}} next:Page(perPage:50){media(id_in:$ids){id nextAiringEpisode{episode airingAt}}}}",
                                 ["ids": ids, "a": Int(from.timeIntervalSince1970), "b": Int(to.timeIntervalSince1970)])
@@ -464,7 +440,7 @@ enum Kitsu {
 
     static func home() async throws -> Home {
         async let p = get("anime?sort=-userCount&page%5Blimit%5D=20")
-        async let t = get("anime?filter%5Bstatus%5D=current&sort=-userCount&page%5Blimit%5D=20") // its trending list is stale
+        async let t = get("anime?filter%5Bstatus%5D=current&sort=-userCount&page%5Blimit%5D=20")
         return try await Home(rows: [Row(title: "Airing now", items: list(t)), Row(title: "Most popular", items: list(p))])
     }
 
@@ -484,7 +460,6 @@ enum Kitsu {
         return parse(d, j.a("included"))
     }
 
-    // Used when AniList is down and we only know the title.
     static func detail(title: String) async throws -> Anime {
         let j = try await get("anime?page%5Blimit%5D=1&include=streamingLinks.streamer&filter%5Btext%5D=" + Net.enc(title))
         guard let d = j.a("data").first else { throw URLError(.badServerResponse) }
@@ -520,7 +495,6 @@ enum Kitsu {
 }
 
 enum TMDB {
-    // Accepts either the short v3 "API key" or the long v4 "read access token".
     static func get(_ path: String, key: String) async throws -> J {
         let bearer = key.count > 40
         var r = URLRequest(url: URL(string: "https://api.themoviedb.org/3/" + path + (bearer ? "" : (path.contains("?") ? "&" : "?") + "api_key=" + Net.enc(key)))!)
@@ -528,7 +502,6 @@ enum TMDB {
         return try await Net.json(r)
     }
 
-    // "Attack on Titan Season 3 Part 2" -> also try "Attack on Titan": TMDB keeps all seasons under one show.
     static func searchTerms(_ titles: [String]) -> [String] {
         var out: [String] = []
         for t in titles {
@@ -541,7 +514,6 @@ enum TMDB {
         return out
     }
 
-    // Search results, animated Japanese shows first.
     static func rank(_ results: [J]) -> [Candidate] {
         func score(_ r: J) -> Int {
             ((r["genre_ids"] as? [Int] ?? []).contains(16) ? 2 : 0) + (r.s("original_language") == "ja" ? 1 : 0)
@@ -551,7 +523,6 @@ enum TMDB {
         }
     }
 
-    // pick: a TMDB id the user chose, -1 = "none of these", nil = best guess.
     static func watch(for a: Anime, key: String, region: String, pick: Int?) async throws -> Watch {
         let kind = a.isMovie ? "movie" : "tv"
         var cands: [Candidate] = []
@@ -574,10 +545,8 @@ enum TMDB {
     }
 }
 
-// Movie of the Night's Streaming Availability API: per-country availability with direct links,
-// and commercial use is allowed on every plan (TMDB's free key isn't). Keys from their own site or from RapidAPI both work.
 enum MotN {
-    static var viaRapid: Bool? // learned from the first request that works
+    static var viaRapid: Bool?
 
     static func get(_ path: String, key: String) async throws -> Any {
         for rapid in viaRapid.map({ [$0] }) ?? [false, true] {
@@ -586,7 +555,7 @@ enum MotN {
             if rapid { r.setValue("streaming-availability.p.rapidapi.com", forHTTPHeaderField: "X-RapidAPI-Host") }
             let (data, resp) = try await Net.session.data(for: r)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            if code == 401 || code == 403, viaRapid == nil { continue } // not this kind of key: try the other
+            if code == 401 || code == 403, viaRapid == nil { continue }
             guard code == 200 else { throw URLError(.badServerResponse) }
             viaRapid = rapid
             return try JSONSerialization.jsonObject(with: data)
@@ -594,7 +563,6 @@ enum MotN {
         throw URLError(.userAuthenticationRequired)
     }
 
-    // Best match first: animated, then closest start year.
     static func rank(_ shows: [J], year: Int?) -> [J] {
         func score(_ s: J) -> (Int, Int) {
             let anim = (s["genres"] as? [J] ?? []).contains { $0.s("id") == "animation" } ? 0 : 1
@@ -607,9 +575,8 @@ enum MotN {
         }.map(\.1)
     }
 
-    static func tmdbId(_ s: J) -> Int? { s.s("tmdbId")?.split(separator: "/").last.flatMap { Int($0) } } // "tv/1429"
+    static func tmdbId(_ s: J) -> Int? { s.s("tmdbId")?.split(separator: "/").last.flatMap { Int($0) } }
 
-    // Turns one show's options for a country into Watch's lists. Rent/buy/addon go under "Rent or buy".
     static func watch(from s: J, country: String, candidates: [Candidate]) -> Watch {
         var w = Watch(tmdbId: tmdbId(s) ?? -2, name: s.s("title") ?? "", year: (s.i("firstAirYear") ?? s.i("releaseYear")).map(String.init),
                       seasons: s.i("seasonCount"), candidates: candidates, source: "Movie of the Night")
@@ -637,7 +604,6 @@ enum MotN {
     }
 }
 
-// A direct link to the service if AniList/Kitsu had one ("Netflix" matches "Netflix"), else nil.
 func directLink(_ provider: String, _ links: [StreamLink]) -> URL? {
     func norm(_ s: String) -> String { s.lowercased().filter(\.isLetter) }
     let p = norm(provider)

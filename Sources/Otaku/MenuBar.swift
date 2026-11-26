@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-// The menu bar shortcut: what from My list airs today, and what's coming up this week.
 struct MenuBarLabel: View {
     @ObservedObject var store: Store
 
@@ -13,14 +12,12 @@ struct MenuBarLabel: View {
 }
 
 extension MenuBarLabel {
-    // The logo in one colour: the striped sun with the play button cut out of it.
-    // A template image, so macOS draws it white or black to suit the menu bar.
     static let icon: NSImage = {
         let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             NSColor.black.setFill()
             NSBezierPath(ovalIn: NSRect(x: 1.5, y: 1.5, width: 15, height: 15)).fill()
             NSGraphicsContext.current?.compositingOperation = .destinationOut
-            for (y, h) in [(5.6, 0.9), (3.6, 1.2)] { NSRect(x: 0, y: y, width: 18, height: h).fill() } // stripes, low on the sun
+            for (y, h) in [(5.6, 0.9), (3.6, 1.2)] { NSRect(x: 0, y: y, width: 18, height: h).fill() }
             let play = NSBezierPath()
             play.move(to: NSPoint(x: 7.2, y: 12.6))
             play.line(to: NSPoint(x: 12.6, y: 9.6))
@@ -35,20 +32,19 @@ extension MenuBarLabel {
 }
 
 extension MenuBarLabel {
-    // A torii gate, the "home" button when you've followed related shows a long way.
     static let torii: NSImage = {
         let img = NSImage(size: NSSize(width: 18, height: 16), flipped: true) { _ in
             NSColor.black.setFill()
-            let top = NSBezierPath() // the kasagi: a top beam with upturned ends
+            let top = NSBezierPath()
             top.move(to: NSPoint(x: 0.5, y: 1))
             top.curve(to: NSPoint(x: 17.5, y: 1), controlPoint1: NSPoint(x: 6, y: 3.2), controlPoint2: NSPoint(x: 12, y: 3.2))
             top.line(to: NSPoint(x: 16.5, y: 4.2))
             top.curve(to: NSPoint(x: 1.5, y: 4.2), controlPoint1: NSPoint(x: 12, y: 5.6), controlPoint2: NSPoint(x: 6, y: 5.6))
             top.close(); top.fill()
-            NSRect(x: 2.5, y: 7, width: 13, height: 1.8).fill() // the nuki
-            NSRect(x: 4, y: 4, width: 1.9, height: 12).fill()   // pillars
+            NSRect(x: 2.5, y: 7, width: 13, height: 1.8).fill()
+            NSRect(x: 4, y: 4, width: 1.9, height: 12).fill()
             NSRect(x: 12.1, y: 4, width: 1.9, height: 12).fill()
-            NSRect(x: 8.2, y: 4.5, width: 1.6, height: 2.5).fill() // the little strut between beams
+            NSRect(x: 8.2, y: 4.5, width: 1.6, height: 2.5).fill()
             return true
         }
         img.isTemplate = true
@@ -121,7 +117,6 @@ struct MenuBarPanel: View {
         .help("Open \(s.anime.title)")
     }
 
-    // Today's episodes as little banners, like the app's big pictures.
     func tile(_ s: Airing) -> some View {
         Button { show(s.anime) } label: {
             ZStack(alignment: .leading) {
@@ -154,7 +149,6 @@ struct MenuBarPanel: View {
         return d.formatted(.dateTime.weekday(.abbreviated).hour().minute())
     }
 
-    // Brings the main window forward (opening one if it was closed), optionally on a show's page.
     func show(_ a: Anime?) {
         NSApp.activate()
         if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) { openWindow(id: "main") }

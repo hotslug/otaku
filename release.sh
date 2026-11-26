@@ -1,20 +1,17 @@
 #!/bin/sh
-# ./release.sh            -> builds Otaku.dmg
-# ./release.sh publish "notes" -> also creates the GitHub + Gitea release for the version in build-app.sh
 set -e
 cd "$(dirname "$0")"
 ./build-app.sh
 rm -rf .dmg Otaku.dmg && mkdir .dmg
 cp -R Otaku.app .dmg/ && ln -s /Applications .dmg/Applications
 cp Otaku.icns .dmg/.VolumeIcon.icns
-# Window picture (drawn by the app, 1x + 2x in one TIFF), then Finder lays out the window: app left, arrow, Applications right.
 mkdir .dmg/.background
 OTAKU_DMG_BG=.dmg/.background Otaku.app/Contents/MacOS/Otaku
 tiffutil -cathidpicheck .dmg/.background/bg.png .dmg/.background/bg@2x.png -out .dmg/.background/bg.tiff 2>/dev/null
 rm .dmg/.background/bg*.png
 hdiutil create -volname Otaku -srcfolder .dmg -format UDRW -o .rw.dmg -quiet
 [ -d /Volumes/Otaku ] && hdiutil detach /Volumes/Otaku -quiet
-hdiutil attach .rw.dmg -quiet # visible to Finder (no -nobrowse) so it can be laid out
+hdiutil attach .rw.dmg -quiet
 osascript <<'EOS'
 tell application "Finder"
   tell disk "Otaku"

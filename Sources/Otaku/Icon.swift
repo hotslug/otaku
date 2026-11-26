@@ -1,7 +1,5 @@
 import AppKit
 
-// App icon: a striped "rising sun" with a play button inside it (anime + watch),
-// on a night-sky tile with anime sparkles. Drawn in code; ./make-icon.sh turns it into Otaku.icns.
 enum Icon {
     static func color(_ hex: Int, _ alpha: CGFloat = 1) -> NSColor {
         NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
@@ -18,7 +16,6 @@ enum Icon {
     static func draw() {
         let tile = NSBezierPath(roundedRect: NSRect(x: 100, y: 100, width: 824, height: 824), xRadius: 185, yRadius: 185)
 
-        // Soft drop shadow under the tile, like other macOS icons.
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()
         shadow.shadowColor = .black.withAlphaComponent(0.35)
@@ -31,13 +28,12 @@ enum Icon {
 
         NSGraphicsContext.saveGraphicsState()
         tile.addClip()
-        NSGradient(starting: color(0x3A1A6E), ending: color(0x120E2E))!.draw(in: tile, angle: 90) // night sky, lighter at the horizon
+        NSGradient(starting: color(0x3A1A6E), ending: color(0x120E2E))!.draw(in: tile, angle: 90)
 
         let sun = NSPoint(x: 512, y: 455), r: CGFloat = 255
         NSGradient(starting: color(0xFF4F8B, 0.55), ending: color(0xFF4F8B, 0))!
             .draw(fromCenter: sun, radius: r * 0.8, toCenter: sun, radius: r * 1.75, options: .drawsBeforeStartingLocation)
 
-        // Sun with synthwave stripes cut out of its lower half.
         let ctx = NSGraphicsContext.current!.cgContext
         ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         let disc = NSBezierPath(ovalIn: NSRect(x: sun.x - r, y: sun.y - r, width: 2 * r, height: 2 * r))
@@ -48,14 +44,13 @@ enum Icon {
         }
         ctx.endTransparencyLayer()
 
-        // Rounded white play button, nudged right so it looks centred.
         NSGraphicsContext.saveGraphicsState()
         let glow = NSShadow()
         glow.shadowColor = color(0x7A1E52, 0.6)
         glow.shadowBlurRadius = 30
         glow.shadowOffset = NSSize(width: 0, height: -8)
         glow.set()
-        ctx.beginTransparencyLayer(auxiliaryInfo: nil) // shadow the fill + rounded stroke once, as one shape
+        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         let play = NSBezierPath()
         let cx = sun.x + 18
         play.move(to: NSPoint(x: cx - 80, y: sun.y + 115))
@@ -88,8 +83,6 @@ enum Icon {
         return (try? png.write(to: URL(fileURLWithPath: path))) != nil
     }
 
-    // DMG window background (660x400pt): Otaku's light sky, a sunset arrow from the app to Applications,
-    // the striped sun rising at the bottom. Light, so Finder's black icon names stay readable.
     static func writeDMGBackground(to dir: String) -> Bool {
         [1, 2].allSatisfy { scale in
             let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 660 * scale, pixelsHigh: 400 * scale, bitsPerSample: 8, samplesPerPixel: 4,
@@ -105,10 +98,9 @@ enum Icon {
     }
 
     static func drawDMGBackground() {
-        let w: CGFloat = 660, h: CGFloat = 400 // origin bottom-left; Finder puts the icons' centres 190pt from the top
+        let w: CGFloat = 660, h: CGFloat = 400
         NSGradient(starting: color(0xFFFFFF), ending: color(0xF6C9DF))!.draw(in: NSRect(x: 0, y: 0, width: w, height: h), angle: -90)
 
-        // The logo's striped sun, rising from the bottom edge (drawn on its own layer so the stripes show the sky through).
         let sun = NSImage(size: NSSize(width: 300, height: 100), flipped: false) { _ in
             let disc = NSBezierPath(ovalIn: NSRect(x: 0, y: -205, width: 300, height: 300))
             disc.addClip()
@@ -119,12 +111,10 @@ enum Icon {
         }
         sun.draw(in: NSRect(x: w / 2 - 150, y: 0, width: 300, height: 100), from: .zero, operation: .sourceOver, fraction: 0.85)
 
-        // Sparkles, like the icon's.
         for (x, y, r, c) in [(70.0, 330.0, 14.0, 0xFF3D7F), (600, 345, 11, 0xE8A317), (105, 80, 10, 0xE8A317), (565, 95, 13, 0xFF7A59), (575, 300, 6, 0xFF3D7F), (60, 200, 6, 0xFF7A59)] {
             color(c, 0.8).setFill(); sparkle(NSPoint(x: x, y: y), r)
         }
 
-        // Arrow: app (x 180) -> Applications (x 480), at icon height.
         let y = h - 190
         let arrow = NSBezierPath()
         arrow.move(to: NSPoint(x: 262, y: y + 4))
@@ -136,7 +126,6 @@ enum Icon {
         color(0xFF5A6C).setStroke()
         arrow.stroke(); head.stroke()
 
-        // Heading.
         let text = NSAttributedString(string: "Drag Otaku into Applications to install", attributes: [
             .font: NSFont.systemFont(ofSize: 17, weight: .semibold), .foregroundColor: color(0x2A1657)])
         text.draw(at: NSPoint(x: (w - text.size().width) / 2, y: h - 62))

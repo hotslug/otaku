@@ -1,8 +1,6 @@
 import AppKit
 import SwiftUI
 
-// Keyboard: ⌘F jumps to search; arrows move a highlight between cards (the same look as hovering), Return opens it.
-// One key watcher for the main window instead of SwiftUI focus, which fights the toolbar search field.
 @MainActor enum Keys {
     static func install() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
@@ -13,7 +11,6 @@ import SwiftUI
         }
     }
 
-    // A brighter placeholder in the toolbar search box. (Its bezel can't be restyled: a layer fill never shows.)
     static func styleSearch(_ w: NSWindow?) {
         guard let f = searchField(w), let cell = f.cell as? NSSearchFieldCell else { return }
         cell.placeholderAttributedString = NSAttributedString(string: cell.placeholderString ?? "",
@@ -26,15 +23,14 @@ import SwiftUI
 
     static func handle(_ e: NSEvent) -> Bool {
         let store = Store.shared, w = e.window
-        guard let field = searchField(w) else { return false } // not the main window (Settings, a sheet…)
+        guard let field = searchField(w) else { return false }
         let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
         if mods == .command, e.charactersIgnoringModifiers == "f" {
             w?.makeFirstResponder(field)
             return true
         }
         guard mods.isEmpty else { return false }
-        if let editor = w?.firstResponder as? NSTextView { // typing somewhere
-            // ↓ from the search box: on to the results
+        if let editor = w?.firstResponder as? NSTextView {
             guard editor.delegate as? NSSearchField === field, e.keyCode == 125, !store.navRows.isEmpty else { return false }
             w?.makeFirstResponder(nil)
             return store.arrow(0, 0)
@@ -53,14 +49,12 @@ import SwiftUI
 struct NavRow { let key: String; let items: [Anime]; let grid: Bool }
 
 extension Store {
-    // The cards on screen, row by row, in the same order the views draw them.
     var navRows: [NavRow] {
         guard path.isEmpty else { return [] }
         switch tab {
         case .discover:
-            if let r = results { return r.count < 2 ? [] : [NavRow(key: resultsTitle, items: Array(r.dropFirst()), grid: true)] } // the first is the picture
+            if let r = results { return r.count < 2 ? [] : [NavRow(key: resultsTitle, items: Array(r.dropFirst()), grid: true)] }
             return discoverRows.map { NavRow(key: $0.title, items: $0.items, grid: false) }
-        // ponytail: the wide Watching row isn't in arrow-key reach (its cards step differently); add it if that's missed.
         case .list: return myListRows.filter { $0.title != Status.watching.rawValue }.map { NavRow(key: $0.title, items: $0.items, grid: false) }
         case .schedule: return []
         }
@@ -68,7 +62,6 @@ extension Store {
 
     func firstVisible(_ row: NavRow) -> Int { row.grid ? 0 : Int(((rowX[row.key] ?? 0) / Strip.step).rounded()) }
 
-    // Moves the highlight; with nothing highlighted yet, the first arrow just lights up a card.
     func arrow(_ dx: Int, _ dy: Int) -> Bool {
         let rows = navRows
         guard !rows.isEmpty else { return false }
@@ -79,7 +72,7 @@ extension Store {
         }
         if rows[r].grid {
             i += dx + dy * max(1, gridCols)
-        } else if dy != 0 { // same spot on screen in the row above/below
+        } else if dy != 0 {
             let col = i - firstVisible(rows[r])
             r = min(max(0, r + dy), rows.count - 1)
             i = firstVisible(rows[r]) + col
@@ -96,7 +89,6 @@ extension Store {
         hoverCard = row.key + "|" + a.id
         reveal = row.grid ? hoverCard : row.key
         guard !row.grid, let width = rowWidth[row.key] else { return }
-        // Page the row so the card is fully on screen.
         let visible = max(1, Int((width + 18) / Strip.step)), first = firstVisible(row)
         var x: CGFloat?
         if i < first { x = CGFloat(i) * Strip.step }

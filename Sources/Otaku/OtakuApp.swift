@@ -13,7 +13,7 @@ struct OtakuApp: App {
             ContentView(store: .shared).frame(minWidth: 720, minHeight: 520)
                 .tint(Theme.pink)
         }
-        .restorationBehavior(.disabled) // always open a window on launch (it stays running with none, for alerts)
+        .restorationBehavior(.disabled)
         .defaultSize(width: 1240, height: 860)
         Settings { SettingsView(store: .shared).tint(Theme.pink) }
         MenuBarExtra(isInserted: Binding(get: { Store.shared.inMenuBar }, set: { Store.shared.inMenuBar = $0 })) {
@@ -29,8 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillFinishLaunching(_ n: Notification) {
         let env = ProcessInfo.processInfo.environment
         if let out = env["OTAKU_ICON"] { exit(Icon.write(to: out) ? 0 : 1) }
-        if let dir = env["OTAKU_DMG_BG"] { exit(Icon.writeDMGBackground(to: dir) ? 0 : 1) } // release.sh: DMG window picture
-        if let out = env["OTAKU_MENU_ICON"] { // preview of the menu bar icon, 8x size, white on dark and black on light
+        if let dir = env["OTAKU_DMG_BG"] { exit(Icon.writeDMGBackground(to: dir) ? 0 : 1) }
+        if let out = env["OTAKU_MENU_ICON"] {
             let img = NSImage(size: NSSize(width: 320, height: 160), flipped: false) { _ in
                 NSColor(white: 0.15, alpha: 1).setFill(); NSRect(x: 0, y: 0, width: 160, height: 160).fill()
                 NSColor(white: 0.93, alpha: 1).setFill(); NSRect(x: 160, y: 0, width: 160, height: 160).fill()
@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             exit((try? png?.write(to: URL(fileURLWithPath: out))) != nil ? 0 : 1)
         }
         if env["OTAKU_SELFTEST"] != nil { exit(SelfTest.run()) }
-        NSApp.setActivationPolicy(.regular) // `swift run` has no bundle; make it a normal app
+        NSApp.setActivationPolicy(.regular)
         if Alerts.available { UNUserNotificationCenter.current().delegate = self }
     }
 
@@ -54,11 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Keys.install()
         Store.shared.appearance.apply()
 
-        // Keeps running with the window closed (click the Dock icon to reopen) so alerts still arrive.
         Task { @MainActor in
             while true {
                 await Store.shared.checkAiring()
-                await Store.shared.loadSchedule() // once a day; feeds the menu bar
+                await Store.shared.loadSchedule()
                 try? await Task.sleep(for: .seconds(15 * 60))
             }
         }
@@ -93,16 +92,16 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.sky.ignoresSafeArea())
-            .toolbarBackground(Theme.dusk, for: .windowToolbar) // match the night sky below
-            .toolbarBackgroundVisibility(store.heroOnTop ? .hidden : .visible, for: .windowToolbar) // a page's hero picture runs up under it
+            .toolbarBackground(Theme.dusk, for: .windowToolbar)
+            .toolbarBackgroundVisibility(store.heroOnTop ? .hidden : .visible, for: .windowToolbar)
             .navigationTitle("Otaku")
             .navigationDestination(for: Anime.self) { a in
                 DetailView(store: store, anime: a)
-                    .navigationBarBackButtonHidden() // our own back, so the torii can sit before it
+                    .navigationBarBackButtonHidden()
                     .toolbar {
                         ToolbarItem(placement: .navigation) {
                             HStack(spacing: 2) {
-                                if store.path.count > 1 { // deep in related shows: one click back to where we started
+                                if store.path.count > 1 {
                                     Button { store.path = [] } label: { Image(nsImage: MenuBarLabel.torii) }
                                         .help("Back to \(store.tab.rawValue)")
                                 }
@@ -121,7 +120,7 @@ struct ContentView: View {
                         ForEach(Tab.allCases, id: \.self) { t in
                             Button { store.tab = t; store.path = [] } label: { Label(t.rawValue, systemImage: t.icon) }
                                 .buttonStyle(ChipStyle(active: store.tab == t))
-                                .labelStyle(.titleAndIcon) // toolbars show icons only by default
+                                .labelStyle(.titleAndIcon)
                                 .focusable(false)
                         }
                     }
@@ -143,27 +142,26 @@ struct ContentView: View {
         }
         .task {
             await store.loadHome()
-            NSApp.windows.forEach(Keys.styleSearch) // also when the window never becomes key (launched from a script); the toolbar is up by now
-            // Layout checks: OTAKU_QUERY=frieren (+ OTAKU_OPEN=1 to open the first result), OTAKU_TAB=Schedule, OTAKU_HOVER=<row title>, OTAKU_SETTINGS=1.
+            NSApp.windows.forEach(Keys.styleSearch)
             let env = ProcessInfo.processInfo.environment
             if let t = env["OTAKU_TAB"].flatMap(Tab.init(rawValue:)) { store.tab = t }
-            if let s = env["OTAKU_SEASON"] { store.filters.season = "WINTER"; store.filters.year = Int(s) } // e.g. OTAKU_SEASON=2027
-            if env["OTAKU_SURPRISE"] != nil { try? await Task.sleep(for: .seconds(4)); await store.surprise() } // after any filters have loaded, like a click
+            if let s = env["OTAKU_SEASON"] { store.filters.season = "WINTER"; store.filters.year = Int(s) }
+            if env["OTAKU_SURPRISE"] != nil { try? await Task.sleep(for: .seconds(4)); await store.surprise() }
             if env["OTAKU_SETTINGS"] != nil { openSettings() }
-            if let out = env["OTAKU_MENU_SNAPSHOT"] { // layout check: draw the menu bar panel to a PNG
+            if let out = env["OTAKU_MENU_SNAPSHOT"] {
                 await store.loadSchedule()
                 let r = ImageRenderer(content: MenuBarPanel(store: store).environment(\.colorScheme, .dark))
                 r.scale = 2
                 if let img = r.nsImage, let tiff = img.tiffRepresentation { try? NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out)) }
             }
-            if let word = env["OTAKU_TYPE"] { // types a word letter by letter, like a person
+            if let word = env["OTAKU_TYPE"] {
                 for i in 1...word.count {
                     store.query = String(word.prefix(i))
                     try? await Task.sleep(for: .milliseconds(140))
                 }
             }
             if let row = env["OTAKU_HOVER"], let items = store.home?.rows.first(where: { $0.title == row })?.items, items.count > 7 {
-                store.hoverRow = row // pretend the pointer is on this row, paged once
+                store.hoverRow = row
                 var p = ScrollPosition()
                 p.scrollTo(x: 3 * Strip.step)
                 store.rowScroll[row] = p
@@ -173,8 +171,8 @@ struct ContentView: View {
                 store.query = q
                 await store.search()
                 if env["OTAKU_OPEN"] != nil, let first = store.results?.first {
-                    store.path = env["OTAKU_OPEN"] == "2" ? Array(store.results!.prefix(2)) : [first] // 2 = drilled down, shows the torii
-                    if env["OTAKU_PLAY"] != nil { // also open its trailer once the page has loaded
+                    store.path = env["OTAKU_OPEN"] == "2" ? Array(store.results!.prefix(2)) : [first]
+                    if env["OTAKU_PLAY"] != nil {
                         try? await Task.sleep(for: .seconds(4))
                         store.playing = store.details[first.id]?.trailer
                     }
@@ -222,11 +220,11 @@ struct DiscoverView: View {
                 Banners(store: store)
                 FilterBar(store: store)
                 if store.searching {
-                    SkeletonGrid().transition(.identity) // placeholders vanish at once; only real content fades in
+                    SkeletonGrid().transition(.identity)
                 } else if let r = store.results {
                     let what = store.resultsFor.isEmpty ? "these filters" : "“\(store.resultsFor)”"
                     if r.isEmpty { Text("No anime found for \(what).").foregroundStyle(.secondary) }
-                    else if r.count > 1 { Shelf(store: store, title: store.resultsTitle, items: Array(r.dropFirst())) } // the first is the picture above
+                    else if r.count > 1 { Shelf(store: store, title: store.resultsTitle, items: Array(r.dropFirst())) }
                 } else if store.home != nil {
                     ForEach(store.discoverRows) { Strip(store: store, title: $0.title, items: $0.items) }
                 } else if store.error == nil {
@@ -237,7 +235,7 @@ struct DiscoverView: View {
             .animation(.easeOut(duration: 0.3), value: store.searching)
             .animation(.easeOut(duration: 0.4), value: store.home == nil)
         }
-        .heroPage(!slides.isEmpty) // the picture runs up under the toolbar like a show's page
+        .heroPage(!slides.isEmpty)
         .onChange(of: store.reveal) { if let r = store.reveal { withAnimation { proxy.scrollTo(r) } } }
         }
         .task(id: store.list.values.filter(\.favourite).map(\.anime.id).sorted()) { await store.loadForYou() }
@@ -258,7 +256,7 @@ struct FilterBar: View {
                     ForEach(Filters.genres, id: \.self) { Text($0).tag(String?.some($0)) }
                 }
             }
-            if f.season == nil { // a season already says the year
+            if f.season == nil {
                 FilterChip(icon: "calendar", label: f.year.map(String.init) ?? "Year", active: f.year != nil, tip: "Year it started") {
                     Picker("Year", selection: $store.filters.year) {
                         Text("Any year").tag(Int?.none)
@@ -308,7 +306,6 @@ struct FilterBar: View {
     }
 }
 
-// Everything from one season, e.g. Winter 2027, with ‹ › to step to the one before or after.
 struct SeasonPicker: View {
     @ObservedObject var store: Store
 
@@ -344,13 +341,12 @@ struct SeasonPicker: View {
     }
 }
 
-// A pill that opens a menu: grey with its name when unset, filled with its value when set.
 struct FilterChip<Content: View>: View {
     let icon: String
     let label: String
     let active: Bool
     let tip: String
-    var sizedFor: [String] = [] // always as wide as the widest of these, so the pill never changes size
+    var sizedFor: [String] = []
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -359,7 +355,7 @@ struct FilterChip<Content: View>: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                ZStack(alignment: .leading) { // label hugs its icon; the spare width goes after it
+                ZStack(alignment: .leading) {
                     ForEach(sizedFor, id: \.self) { Text($0).hidden() }
                     Text(label)
                 }
@@ -370,7 +366,7 @@ struct FilterChip<Content: View>: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .focusEffectDisabled() // no blue focus ring around the pill
+        .focusEffectDisabled()
         .fixedSize()
         .help(tip)
     }
@@ -438,7 +434,7 @@ struct ScheduleView: View {
         let hero = store.heroOnTop ? store.upNext : nil
         ScrollView {
             if let n = hero {
-                TimelineView(.everyMinute) { t in // the countdown ticks
+                TimelineView(.everyMinute) { t in
                     let mine = store.list[n.anime.id] != nil
                     Carousel(store: store, slides: [Slide(anime: n.anime, note: (mine ? "Up next from My list" : "Up next") + " · episode \(n.episode) " + Self.countdown(n.at, now: t.date))])
                 }
@@ -480,7 +476,6 @@ struct ScheduleView: View {
         .task { await store.loadSchedule() }
     }
 
-    // "in 3h 20m", "in 12m", or "tomorrow 09:30" when it's further off.
     static func countdown(_ at: Date, now: Date) -> String {
         let m = Int(at.timeIntervalSince(now) / 60)
         if m < 1 { return "any minute now" }
@@ -489,7 +484,6 @@ struct ScheduleView: View {
         return at.formatted(.dateTime.weekday(.wide).hour().minute())
     }
 
-    // Columns as the window allows, so the page isn't one long list down the left.
     @ViewBuilder func grid(_ items: [Airing]) -> some View {
         if !items.isEmpty {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 380), spacing: 24, alignment: .leading)], alignment: .leading, spacing: 4) {
@@ -501,7 +495,6 @@ struct ScheduleView: View {
     }
 }
 
-// Between today's aired and upcoming episodes.
 struct NowLine: View {
     let at: Date
 
@@ -538,35 +531,33 @@ struct ScheduleRow: View {
     }
 }
 
-// One row of cards, paged with ‹ › like streaming apps; no scroll bar. Swiping still works.
 struct Strip: View {
     @ObservedObject var store: Store
     let title: String
     let items: [Anime]
     var notes: (Anime) -> String? = { _ in nil }
-    var id: String? // keeps scroll position apart for rows sharing a title (each show's Related row)
+    var id: String?
     var key: String { id ?? title }
 
-    static let step: CGFloat = 140 + 18 // card width + gap
+    static let step: CGFloat = 140 + 18
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) { // the row's hover headroom spaces it from the title (and keeps a grown card off it)
+        VStack(alignment: .leading, spacing: 0) {
             SectionTitle(title)
             PagedRow(store: store, key: key) {
                 ForEach(items) { a in CardLink(store: store, a: a, note: notes(a), row: key) }
             }
         }
-        .id(key) // the arrow keys scroll the page to this row
+        .id(key)
     }
 }
 
-// The paging part of a row: ‹ › on hover, exact one-page jumps, no scroll bar.
 struct PagedRow<Content: View>: View {
     @ObservedObject var store: Store
     let key: String
-    var step: CGFloat = Strip.step // item width + 18pt gap
+    var step: CGFloat = Strip.step
     var height: CGFloat = 284
-    var top: CGFloat = 22 // headroom for the card hover lift
+    var top: CGFloat = 22
     var arrowHeight: CGFloat = 200
     @ViewBuilder let content: () -> Content
 
@@ -575,13 +566,12 @@ struct PagedRow<Content: View>: View {
             let page = CGFloat(max(1, Int((geo.size.width + 18) / step))) * step
             let x = store.rowX[key] ?? 0, end = store.rowEnd[key] ?? 0
             ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 18) { content() } // not lazy: a lazy row draws blanks after paging
+                HStack(alignment: .top, spacing: 18) { content() }
                     .padding(.top, top)
-                    .padding(.horizontal, 6) // so the first and last cards aren't clipped when they grow
+                    .padding(.horizontal, 6)
                     .scrollTargetLayout()
             }
             .scrollIndicators(.never)
-            // Scrolls only this row by an exact distance (scrolling *to a card* would also move the page).
             .scrollPosition(Binding(get: { store.rowScroll[key] ?? ScrollPosition() }, set: { store.rowScroll[key] = $0 }))
             .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.x, $0.contentSize.width - $0.containerSize.width, $0.containerSize.width] } action: { _, v in
                 store.rowX[key] = v[0]
@@ -602,7 +592,6 @@ struct PagedRow<Content: View>: View {
         }
     }
 
-    // Lands on an item edge, except at the very end of the row.
     func go(_ x: CGFloat, _ end: CGFloat) {
         var p = store.rowScroll[key] ?? ScrollPosition()
         p.scrollTo(x: min(max(0, (x / step).rounded() * step), end))
@@ -620,12 +609,11 @@ struct PagedRow<Content: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.top, top) // line up with the items, below the headroom
+        .padding(.top, top)
         .transition(.opacity)
     }
 }
 
-// A character with their voice actor's photo tucked in the corner.
 struct CastTile: View {
     let c: CastMember
     let english: Bool
@@ -675,7 +663,6 @@ struct Shelf: View {
     }
 }
 
-// The status choices, shared by the card's ＋ menu and the details page.
 struct StatusItems: View {
     @ObservedObject var store: Store
     let a: Anime
@@ -689,17 +676,16 @@ struct StatusItems: View {
         }
         if e?.status != nil {
             Divider()
-            Button("Remove from My list…") { store.confirmRemove = a } // asks first
+            Button("Remove from My list…") { store.confirmRemove = a }
         }
     }
 }
 
-// A card that opens the show, with ☆ and ＋ buttons on hover (kept visible once set).
 struct CardLink: View {
     @ObservedObject var store: Store
     let a: Anime
     var note: String?
-    var row = "" // the same show can sit in several rows; only the card under the pointer lights up
+    var row = ""
     var hoverKey: String { row + "|" + a.id }
 
     var body: some View {
@@ -731,7 +717,7 @@ struct CardLink: View {
             }
             .shadow(color: Theme.pink.opacity(hover ? 0.55 : 0), radius: 18, y: 6)
             .scaleEffect(hover ? 1.08 : 1, anchor: .bottom)
-            .zIndex(hover ? 1 : 0) // draw over its neighbours
+            .zIndex(hover ? 1 : 0)
             .animation(.easeOut(duration: 0.15), value: hover)
             .onHover { inside in
                 if inside { store.hoverCard = hoverKey } else if store.hoverCard == hoverKey { store.hoverCard = nil }
@@ -742,7 +728,7 @@ struct CardLink: View {
 struct CardIcon: View {
     let symbol: String
     let tint: Color
-    var lit = false // on My list: sunset-filled
+    var lit = false
 
     var body: some View {
         Image(systemName: symbol)
@@ -762,7 +748,7 @@ struct Card: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Poster(url: a.poster, width: 140, height: 200)
-            Text(a.title).font(.headline).lineLimit(2, reservesSpace: true) // star lines stay level across a row
+            Text(a.title).font(.headline).lineLimit(2, reservesSpace: true)
             HStack(spacing: 4) {
                 if let sc = a.score { Image(systemName: "star.fill").foregroundStyle(Theme.gold); Text("\(sc) ·") }
                 Text([a.year, a.format].compactMap { $0 }.joined(separator: " · "))
@@ -775,7 +761,6 @@ struct Card: View {
     }
 }
 
-// MARK: Loading placeholders: grey shapes with a soft moving shine, so nothing just pops in.
 
 struct Shimmer: ViewModifier {
     func body(content: Content) -> some View {
@@ -813,7 +798,6 @@ struct SkeletonStrip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Capsule().fill(.quaternary).frame(width: 180, height: 20)
-            // An overlay, so the row fills the width it's given instead of widening the page.
             Color.clear.frame(height: 240)
                 .overlay(alignment: .topLeading) {
                     HStack(alignment: .top, spacing: 18) { ForEach(0..<10, id: \.self) { _ in SkeletonCard() } }
@@ -867,13 +851,11 @@ struct SkeletonRows: View {
     }
 }
 
-// The synopsis, book-page style: comfortable size and spacing, the source as a small credit, long ones folded.
 struct Synopsis: View {
     @ObservedObject var store: Store
     let id: String
     let text: String
 
-    // "...adventure.\n\n(Source: Crunchyroll)" -> ("...adventure.", "Crunchyroll")
     static func split(_ s: String) -> (body: String, source: String?) {
         let pattern = #"\s*[\(\[](?:Source|Written by)\s*:?\s*([^\)\]]+)[\)\]]\s*$"#
         guard let r = s.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else { return (s, nil) }
@@ -911,7 +893,6 @@ struct Synopsis: View {
     }
 }
 
-// Tries each image in turn (a missing one falls through to the next); last resort is the top of the poster, fading out.
 struct BannerImage: View {
     let urls: [URL]
     let poster: URL?
@@ -928,7 +909,7 @@ struct BannerImage: View {
         } else {
             GeometryReader { g in
                 FadeImage(url: poster)
-                    .frame(width: g.size.width, height: g.size.width * 1.4, alignment: .top) // poster shape, top part shows
+                    .frame(width: g.size.width, height: g.size.width * 1.4, alignment: .top)
                     .frame(width: g.size.width, height: g.size.height, alignment: .top)
                     .clipped()
                     .mask(LinearGradient(colors: [.black, .black, .black.opacity(0.15)], startPoint: .top, endPoint: .bottom))
@@ -937,7 +918,6 @@ struct BannerImage: View {
     }
 }
 
-// An image that shimmers while loading and fades in when it arrives.
 struct FadeImage: View {
     let url: URL?
 
@@ -974,7 +954,6 @@ struct DetailView: View {
         ScrollView {
             hero(a, loading: loading)
             VStack(alignment: .leading, spacing: 28) {
-                // Synopsis with the remaining facts beside it; stacked when the window is narrow.
                 if store.detailWidth >= 760 {
                     HStack(alignment: .top, spacing: 48) {
                         synopsis(a, loading: loading)
@@ -1012,20 +991,19 @@ struct DetailView: View {
                 }
             }
             .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading) // full width even when nothing below is wide
+            .frame(maxWidth: .infinity, alignment: .leading)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { store.detailWidth = $0 }
             .animation(.easeOut(duration: 0.35), value: loading)
             moreToWatch(a, loading: loading)
         }
-        .ignoresSafeArea(edges: .top) // the picture runs up under the toolbar
-        .background(Theme.skyBottom.ignoresSafeArea()) // one colour under the picture, so its fade has nothing to meet
+        .ignoresSafeArea(edges: .top)
+        .background(Theme.skyBottom.ignoresSafeArea())
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .navigationTitle("") // the title is on the picture
+        .navigationTitle("")
         .sheet(item: $store.playing) { t in TrailerPlayer(store: store, trailer: t, title: a.title) }
         .task { await store.loadDetail(anime) }
     }
 
-    // Related + recommendations in their own full-width band, set apart from the show's own details.
     @ViewBuilder func moreToWatch(_ a: Anime, loading: Bool) -> some View {
         let rel = a.related ?? [], recs = a.recommended ?? []
         if !loading, !rel.isEmpty || !recs.isEmpty {
@@ -1042,7 +1020,7 @@ struct DetailView: View {
             .padding(.bottom, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.band)
-            .overlay(alignment: .top) { Rectangle().fill(Theme.sunset).frame(height: 2) } // the line between this show and more to watch
+            .overlay(alignment: .top) { Rectangle().fill(Theme.sunset).frame(height: 2) }
             .transition(.opacity)
         }
     }
@@ -1063,7 +1041,7 @@ struct DetailView: View {
 
     @ViewBuilder func synopsis(_ a: Anime, loading: Bool) -> some View {
         if loading { SkeletonLines(widths: [420, 440, 400, 430, 260], height: 13).transition(.identity) }
-        else if !a.synopsis.isEmpty { Synopsis(store: store, id: anime.id, text: a.synopsis).frame(maxWidth: 560, alignment: .leading).transition(.opacity) } // ~75 characters a line, book-like
+        else if !a.synopsis.isEmpty { Synopsis(store: store, id: anime.id, text: a.synopsis).frame(maxWidth: 560, alignment: .leading).transition(.opacity) }
     }
 
     func seasons(_ a: Anime) -> String? {
@@ -1078,7 +1056,6 @@ struct DetailView: View {
 
     static let heroHeight: CGFloat = 520
 
-    // A full-width picture with the show laid over its lower left, like a cinema poster wall.
     @ViewBuilder func hero(_ a: Anime, loading: Bool) -> some View {
         ZStack(alignment: .bottomLeading) {
             HeroPicture(a: a, height: Self.heroHeight, loading: loading)
@@ -1106,7 +1083,7 @@ struct DetailView: View {
                 }
                 .frame(maxWidth: 760, alignment: .leading)
             }
-            .environment(\.colorScheme, .dark) // white on the picture, in Light mode too
+            .environment(\.colorScheme, .dark)
             .padding(.horizontal, 24)
             .padding(.bottom, 8)
         }
@@ -1170,8 +1147,6 @@ struct DetailView: View {
     }
 }
 
-// Streaming links as pills that wrap onto new lines.
-// Plays a trailer in the app; closing the sheet stops it.
 struct TrailerPlayer: View {
     @ObservedObject var store: Store
     let trailer: Trailer
@@ -1202,9 +1177,8 @@ struct WebPlayer: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.mediaTypesRequiringUserActionForPlayback = [] // autoplay
+        config.mediaTypesRequiringUserActionForPlayback = []
         let web = WKWebView(frame: .zero, configuration: config)
-        // YouTube identifies embedding apps by this origin: https:// + the app's bundle id.
         web.loadHTMLString(html, baseURL: URL(string: "https://" + (Bundle.main.bundleIdentifier ?? "local.otaku")))
         return web
     }
@@ -1212,8 +1186,6 @@ struct WebPlayer: NSViewRepresentable {
     func updateNSView(_ web: WKWebView, context: Context) {}
 }
 
-// Streaming links as pills: variants of one service share a pill (Hoopla Sub/Dub → Hoopla ⌄),
-// big services first, and only the first few until "+N more".
 struct Buttons: View {
     @ObservedObject var store = Store.shared
     let items: [(String, URL)]
@@ -1258,7 +1230,6 @@ struct Buttons: View {
     }
 }
 
-// Lays children left to right, wrapping when a row is full.
 struct Flow: Layout {
     var spacing: CGFloat = 8
 
@@ -1432,7 +1403,6 @@ struct SettingsView: View {
     }
 }
 
-// Label on the left, switch lined up on the right.
 struct SettingsSwitch: View {
     let title: String
     @Binding var isOn: Bool
@@ -1446,7 +1416,6 @@ struct SettingsSwitch: View {
     }
 }
 
-// A key entry box with a "Key saved" / "No key" note beside it.
 struct KeyField: View {
     let prompt: String
     @Binding var text: String
@@ -1465,7 +1434,6 @@ struct KeyField: View {
     }
 }
 
-// A rounded group with a sunset-bar heading.
 struct SettingsCard<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
@@ -1485,7 +1453,6 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-// Like Scout's: confirm, remove everything Otaku keeps on this Mac, move the app to the Trash, quit.
 @MainActor func uninstall() {
     NSApp.activate()
     let alert = NSAlert()
@@ -1496,8 +1463,8 @@ struct SettingsCard<Content: View>: View {
     guard alert.runModal() == .alertFirstButtonReturn else { return }
 
     let fm = FileManager.default
-    try? fm.removeItem(at: Store.listFile.deletingLastPathComponent()) // Application Support/Otaku: My list
-    try? fm.removeItem(at: Cache.dir) // Caches/Otaku
+    try? fm.removeItem(at: Store.listFile.deletingLastPathComponent())
+    try? fm.removeItem(at: Cache.dir)
     try? SMAppService.mainApp.unregister()
     if Alerts.available {
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
@@ -1505,13 +1472,11 @@ struct SettingsCard<Content: View>: View {
     }
     UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier ?? "local.otaku")
     UserDefaults.standard.synchronize()
-    // Only ever trash an .app: run from the build folder, the "bundle" is the build directory itself.
     let app = Bundle.main.bundleURL
     guard app.pathExtension == "app" else { NSApp.terminate(nil); return }
     NSWorkspace.shared.recycle([app]) { _, _ in NSApp.terminate(nil) }
 }
 
-// "2023-09-29" → "29 Sep 2023", "2023-09" → "Sep 2023"; a bare year stays as it is.
 func prettyDate(_ s: String?) -> String? {
     guard let s else { return nil }
     let f = DateFormatter()
@@ -1523,18 +1488,15 @@ func prettyDate(_ s: String?) -> String? {
     return s
 }
 
-// The big picture at the top of a page. It scrolls at half speed, so the page seems to slide over it.
 struct HeroPicture: View {
     let a: Anime
     let height: CGFloat
     var loading = false
 
     var body: some View {
-        // In an overlay so a wide picture fills the space instead of widening the page.
         Color.clear.frame(maxWidth: .infinity).frame(height: height)
             .overlay {
                 if loading { Rectangle().fill(.quaternary).shimmer() }
-                // Its own banner (or one borrowed from the series), else the trailer's still, else the top of the poster.
                 else { BannerImage(urls: [a.banner, a.trailer?.still].compactMap { $0 }, poster: a.poster) }
             }
             .visualEffect { c, g in c.offset(y: max(0, -g.frame(in: .scrollView).minY) * 0.5) }
@@ -1543,14 +1505,12 @@ struct HeroPicture: View {
 }
 
 extension View {
-    // A page whose hero picture runs up under the toolbar, over one solid colour so the picture's fade has nothing to meet.
     func heroPage(_ on: Bool) -> some View {
         ignoresSafeArea(edges: on ? .top : [])
             .background { if on { Theme.skyBottom.ignoresSafeArea() } }
     }
 }
 
-// Night on the left for the words, melting into the page at the bottom. Under the show page's and the carousel's pictures.
 struct HeroShade: View {
     var body: some View {
         LinearGradient(stops: [.init(color: Theme.night.opacity(0.92), location: 0), .init(color: Theme.night.opacity(0.55), location: 0.45), .init(color: .clear, location: 0.8)],
@@ -1561,7 +1521,6 @@ struct HeroShade: View {
     }
 }
 
-// ★ 90  2023 · TV · 28 episodes · Finished, then genre pills.
 struct HeroFacts: View {
     let a: Anime
 
@@ -1586,7 +1545,6 @@ struct HeroFacts: View {
     }
 }
 
-// Add to My list + Favourite pills. Pass the card's `anime` so the entry matches wherever the show is opened from.
 struct ListControls: View {
     @ObservedObject var store: Store
     let anime: Anime
@@ -1594,7 +1552,6 @@ struct ListControls: View {
     var body: some View {
         let e = store.list[anime.id]
         HStack(spacing: 8) {
-            // Both pills keep one width whatever they say, so nothing beside them re-wraps.
             FilterChip(icon: e?.status == nil ? "plus" : "checkmark", label: e?.status?.rawValue ?? "Add to My list", active: e?.status != nil,
                        tip: e?.status == nil ? "Add to My list" : "Change or remove", sizedFor: ["Add to My list"] + Status.allCases.map(\.rawValue)) {
                 StatusItems(store: store, a: anime)
@@ -1611,12 +1568,10 @@ struct ListControls: View {
     }
 }
 
-// The start page's big picture: your new episodes, then what's trending. Moves on every 8 seconds; hovering holds it.
 struct Carousel: View {
     @ObservedObject var store: Store
     let slides: [Slide]
     static let height: CGFloat = 470
-    // Kept in the store, like the rest of the app's view state.
     var i: Int { get { min(store.slide, slides.count - 1) } nonmutating set { store.slide = newValue } }
     var hover: Bool { get { store.slideHover } nonmutating set { store.slideHover = newValue } }
 
@@ -1652,11 +1607,11 @@ struct Carousel: View {
         .overlay(alignment: .bottomTrailing) { if slides.count > 1 { dots.padding(.trailing, 24).padding(.bottom, 44) } }
         .overlay(alignment: .leading) { if hover, slides.count > 1 { arrow("chevron.left", -1).padding(.leading, 12) } }
         .overlay(alignment: .trailing) { if hover, slides.count > 1 { arrow("chevron.right", 1).padding(.trailing, 12) } }
-        .environment(\.colorScheme, .dark) // white on the picture, in Light mode too
+        .environment(\.colorScheme, .dark)
         .onHover { hover = $0 }
         .animation(.easeInOut(duration: 0.6), value: i)
         .animation(.easeOut(duration: 0.15), value: hover)
-        .task(id: "\(i) \(hover) \(slides.count)") { // restarts the 8 seconds after every move, and stops while hovered
+        .task(id: "\(i) \(hover) \(slides.count)") {
             guard !hover, slides.count > 1 else { return }
             try? await Task.sleep(for: .seconds(8))
             if !Task.isCancelled { i = (i + 1) % slides.count }
@@ -1688,7 +1643,6 @@ struct Carousel: View {
     }
 }
 
-// A row of wide picture cards (My list's Watching), paged like the poster rows.
 struct WideRow: View {
     @ObservedObject var store: Store
     let title: String

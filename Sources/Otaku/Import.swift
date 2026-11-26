@@ -1,13 +1,11 @@
 import AppKit
 import UniformTypeIdentifiers
 
-// Bring an existing list in from AniList (public profile, by name) or MyAnimeList (its XML export).
-// Adds to My list; never changes the status of a show that's already there.
 enum Import {
     struct Item { var anime: Anime; var status: Status?; var favourite = false }
 
     static func status(anilist s: String) -> Status? {
-        ["CURRENT": .watching, "REPEATING": .watching, "PAUSED": .planning, "PLANNING": .planning, "COMPLETED": .finished][s] // dropped: left out
+        ["CURRENT": .watching, "REPEATING": .watching, "PAUSED": .planning, "PLANNING": .planning, "COMPLETED": .finished][s]
     }
 
     static func status(mal s: String) -> Status? {
@@ -15,7 +13,6 @@ enum Import {
     }
 
     static func anilist(user: String) async throws -> [Item] {
-        // ponytail: only the first 50 favourites; page through them if someone has more.
         let d = try await AniList.query("query($u:String){c:MediaListCollection(userName:$u,type:ANIME){lists{entries{status media{isAdult \(AniList.cardFields)}}}} u:User(name:$u){favourites{anime(perPage:50){nodes{isAdult \(AniList.cardFields)}}}}}",
                                         ["u": user])
         var items: [String: Item] = [:]
@@ -31,7 +28,6 @@ enum Import {
         return Array(items.values)
     }
 
-    // MAL's export: <anime><series_animedb_id>21</series_animedb_id>…<my_status>Watching</my_status></anime>, sometimes gzipped.
     static func mal(file: URL) async throws -> (items: [Item], missing: Int) {
         var data = try Data(contentsOf: file)
         if data.starts(with: [0x1F, 0x8B]) { data = try gunzip(file) }
@@ -43,7 +39,7 @@ enum Import {
         }
         var items: [Item] = []
         let ids = Array(wanted.keys)
-        for start in stride(from: 0, to: ids.count, by: 50) { // AniList knows each show's MAL id; 50 per request
+        for start in stride(from: 0, to: ids.count, by: 50) {
             let d = try await AniList.query("query($ids:[Int]){Page(perPage:50){media(idMal_in:$ids,type:ANIME){idMal isAdult \(AniList.cardFields)}}}",
                                             ["ids": Array(ids[start..<min(start + 50, ids.count)])])
             for m in d.d("Page")?.a("media") ?? [] where m["isAdult"] as? Bool != true {
